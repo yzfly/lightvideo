@@ -1,19 +1,26 @@
 :root {
+    /* 单一强调色 + 冷灰家族，蓝色染色阴影 */
     --primary: #1664ff;
-    --primary-hover: #0e4fd1;
-    --primary-light: #eaf1ff;
+    --primary-hover: #0e53d6;
+    --primary-light: #ecf3ff;
+    --primary-lighter: #f5f9ff;
     --success: #00b42a;
-    --success-light: #e8ffea;
+    --success-light: #e9f9ec;
     --danger: #f53f3f;
-    --danger-light: #ffece8;
-    --warning: #ff7d00;
-    --text-1: #1d2129;
-    --text-2: #4e5969;
-    --text-3: #86909c;
-    --border: #e5e6eb;
-    --fill-1: #f7f8fa;
-    --fill-2: #f2f3f5;
+    --danger-light: #ffefec;
+    --warning: #e8710a;
+    --warning-light: #fdf3e7;
+    --text-1: #1a2233;
+    --text-2: #4b5566;
+    --text-3: #8a94a6;
+    --border: #e6eaf2;
+    --fill-1: #f6f8fb;
+    --fill-2: #eff2f7;
+    --radius-lg: 14px;
     --radius: 10px;
+    --radius-sm: 7px;
+    --shadow-card: 0 1px 2px rgba(26, 34, 51, 0.04), 0 6px 24px rgba(22, 100, 255, 0.05);
+    --shadow-pop: 0 2px 8px rgba(22, 100, 255, 0.28);
 }
 
 * {
@@ -33,10 +40,11 @@ body {
     color: var(--text-1);
     background: var(--fill-1);
     font-size: 14px;
-    line-height: 1.5;
+    line-height: 1.55;
     -webkit-font-smoothing: antialiased;
     user-select: none;
     cursor: default;
+    overflow: hidden;
 }
 
 #app {
@@ -48,4 +56,28 @@ button {
     border: none;
     background: none;
     cursor: pointer;
+    color: inherit;
+}
+
+input {
+    font-family: inherit;
+}
+
+button:focus-visible,
+input:focus-visible {
+    outline: 2px solid rgba(22, 100, 255, 0.45);
+    outline-offset: 2px;
+}
+
+::-webkit-scrollbar {
+    width: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+    background: rgba(26, 34, 51, 0.14);
+    border-radius: 99px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(26, 34, 51, 0.24);
 }

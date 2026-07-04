@@ -1,7 +1,7 @@
 [package]
-name = "slim-video"
+name = "lightvideo"
 version = "1.0.0"
-description = "视频瘦身 SlimVideo - 无损画质，极限压缩"
+description = "轻影 LightVideo - FFmpeg 视频工具箱"
 authors = ["云中江树"]
 license = "CC-BY-NC-4.0"
 repository = ""

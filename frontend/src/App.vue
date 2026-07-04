@@ -1,35 +1,19 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
-import { checkFFmpeg, pickVideos, probe, compress, revealFile, isVideo } from './backend.js'
+import { checkFFmpeg, pickVideos, probe, runFFmpeg, outputPath, revealFile, isVideo } from './backend.js'
+import { TOOLS } from './tools.js'
+import { ICONS } from './icons.js'
 
-// ---------- 压缩设置 (默认值即那条经典指令) ----------
-const settings = reactive({
-  crf: 23,
-  preset: 'medium',
-  maxHeight: 0,
-  audioMode: 'aac',
-})
+// ---------- 工具与设置 ----------
+const currentId = ref('compress')
+const tool = computed(() => TOOLS.find((t) => t.id === currentId.value))
 
-const presets = [
-  { value: 'fast', label: '快速', hint: '速度快，文件稍大' },
-  { value: 'medium', label: '均衡', hint: '推荐，质量与速度兼顾' },
-  { value: 'slow', label: '极致', hint: '更慢，压得更小' },
-]
+// 每个工具各自记忆自己的参数
+const allSettings = reactive(Object.fromEntries(TOOLS.map((t) => [t.id, { ...t.defaults }])))
+const settings = computed(() => allSettings[currentId.value])
 
-const resolutions = [
-  { value: 0, label: '原始' },
-  { value: 1080, label: '1080P' },
-  { value: 720, label: '720P' },
-]
-
-const crfHint = computed(() => {
-  if (settings.crf <= 20) return '画质优先，压缩率较低'
-  if (settings.crf <= 24) return '推荐：肉眼无损，大幅瘦身'
-  return '体积优先，画质轻微下降'
-})
-
-// ---------- 文件队列 ----------
+// ---------- 文件队列 (全局串行，按工具归属展示) ----------
 const items = ref([])
 const ffmpeg = ref(null)
 const dragging = ref(false)
@@ -37,18 +21,26 @@ let uid = 0
 let queueRunning = false
 let unlistenDrop = null
 
-const readyItems = computed(() => items.value.filter((i) => i.status === 'ready'))
-const activeCount = computed(() => items.value.filter((i) => ['queued', 'running'].includes(i.status)).length)
-const doneItems = computed(() => items.value.filter((i) => i.status === 'done'))
-const totalSaved = computed(() => doneItems.value.reduce((s, i) => s + (i.inSize - i.outSize), 0))
+const toolItems = computed(() => items.value.filter((i) => i.toolId === currentId.value))
+const readyItems = computed(() => toolItems.value.filter((i) => i.status === 'ready'))
+const doneItems = computed(() => toolItems.value.filter((i) => i.status === 'done'))
+const runningCount = computed(() => toolItems.value.filter((i) => ['queued', 'running'].includes(i.status)).length)
+
+function activeBadge(toolId) {
+  return items.value.filter((i) => i.toolId === toolId && ['queued', 'running'].includes(i.status)).length
+}
 
 async function addPaths(paths) {
   for (const path of paths) {
     if (!isVideo(path)) continue
-    if (items.value.some((i) => i.path === path && ['ready', 'queued', 'running'].includes(i.status))) continue
+    const dup = items.value.some(
+      (i) => i.toolId === currentId.value && i.path === path && ['ready', 'queued', 'running'].includes(i.status)
+    )
+    if (dup) continue
     const info = await probe(path)
     items.value.push({
       uid: ++uid,
+      toolId: currentId.value,
       ...info,
       status: info.error ? 'error' : 'ready',
       message: info.error || '',
@@ -69,11 +61,22 @@ async function pickFiles() {
 }
 
 function startAll() {
-  for (const item of readyItems.value) item.status = 'queued'
+  const t = tool.value
+  const s = { ...settings.value }
+  for (const item of readyItems.value) {
+    const invalid = t.validate?.(item, s)
+    if (invalid) {
+      item.status = 'error'
+      item.message = invalid
+      continue
+    }
+    item.settings = s
+    item.status = 'queued'
+  }
   runQueue()
 }
 
-// 串行队列: x264 编码本身吃满全核，并行只会互相拖慢
+// 全局串行队列: 编码任务本身吃满全核，并行只会互相拖慢
 async function runQueue() {
   if (queueRunning) return
   queueRunning = true
@@ -89,10 +92,16 @@ async function runQueue() {
 }
 
 async function runOne(item) {
+  const t = TOOLS.find((x) => x.id === item.toolId)
+  const s = item.settings
   item.status = 'running'
   item.percent = 0
   try {
-    const { child, done } = await compress(item, { ...settings }, (p) => {
+    const { suffix, ext } = t.output(item, s)
+    const out = await outputPath(item.path, suffix, ext)
+    const args = t.buildArgs(item, s, out)
+    const totalUs = t.totalUs(item, s)
+    const { child, done } = await runFFmpeg(args, totalUs, (p) => {
       item.percent = p.percent
       item.speed = p.speed
       item.eta = p.eta
@@ -126,21 +135,24 @@ function cancel(item) {
   if (item.child) item.child.kill()
 }
 
+function retry(item) {
+  item.status = 'ready'
+  item.message = ''
+  item.percent = 0
+}
+
 function remove(item) {
   items.value = items.value.filter((i) => i.uid !== item.uid)
 }
 
 function clearFinished() {
-  items.value = items.value.filter((i) => !['done', 'error', 'cancelled'].includes(i.status))
-}
-
-function reveal(path) {
-  revealFile(path)
+  items.value = items.value.filter(
+    (i) => i.toolId !== currentId.value || !['done', 'error', 'cancelled'].includes(i.status)
+  )
 }
 
 onMounted(async () => {
   ffmpeg.value = await checkFFmpeg()
-
   unlistenDrop = await getCurrentWebview().onDragDropEvent((event) => {
     const type = event.payload.type
     if (type === 'drop') {
@@ -185,217 +197,330 @@ function savedPct(item) {
   if (!item.inSize || !item.outSize) return 0
   return Math.round((1 - item.outSize / item.inSize) * 100)
 }
+
+function baseName(path) {
+  return path ? path.split(/[/\\]/).pop() : ''
+}
 </script>
 
 <template>
-  <div class="page" :class="{ dragging }">
-    <!-- 顶栏 -->
-    <header class="topbar">
+  <div class="app" :class="{ dragging }">
+    <!-- 侧栏 -->
+    <aside class="sidebar">
       <div class="brand">
-        <div class="logo">瘦</div>
-        <div>
-          <div class="title">视频瘦身 <span class="en">SlimVideo</span></div>
-          <div class="subtitle">无损画质 · 极限压缩</div>
+        <span class="brand-logo" v-html="ICONS.brand"></span>
+        <div class="brand-text">
+          <div class="brand-name">轻影</div>
+          <div class="brand-sub">LightVideo</div>
         </div>
       </div>
-    </header>
 
-    <main class="main">
+      <nav class="nav">
+        <button
+          v-for="t in TOOLS"
+          :key="t.id"
+          class="nav-item"
+          :class="{ active: t.id === currentId }"
+          @click="currentId = t.id"
+        >
+          <span class="nav-icon" v-html="ICONS[t.icon]"></span>
+          <span class="nav-label">{{ t.name }}</span>
+          <span v-if="activeBadge(t.id)" class="nav-badge">{{ activeBadge(t.id) }}</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-foot">
+        <div>云中江树</div>
+        <div class="sidebar-foot-sub">微信公众号「云中江树」</div>
+      </div>
+    </aside>
+
+    <!-- 主区 -->
+    <main class="content">
+      <header class="tool-head">
+        <h1>{{ tool.name }}</h1>
+        <p>{{ tool.desc }}</p>
+      </header>
+
       <div v-if="ffmpeg && !ffmpeg.found" class="alert">
         内置 FFmpeg 启动失败，请重新安装应用。{{ ffmpeg.error }}
       </div>
 
       <!-- 参数面板 -->
-      <section class="card settings">
-        <div class="setting">
-          <div class="setting-label">
-            画质 <b>CRF {{ settings.crf }}</b>
+      <section class="panel">
+        <div v-for="f in tool.fields" :key="f.key" class="field">
+          <div class="field-label">
+            {{ typeof f.label === 'function' ? f.label(settings) : f.label }}
           </div>
-          <input type="range" min="18" max="28" v-model.number="settings.crf" :disabled="activeCount > 0" />
-          <div class="setting-hint">{{ crfHint }}</div>
-        </div>
 
-        <div class="setting">
-          <div class="setting-label">编码速度</div>
-          <div class="segmented">
+          <input
+            v-if="f.type === 'range'"
+            type="range"
+            :min="f.min"
+            :max="f.max"
+            v-model.number="settings[f.key]"
+            :disabled="runningCount > 0"
+          />
+
+          <div v-else-if="f.type === 'segmented'" class="segmented">
             <button
-              v-for="p in presets"
-              :key="p.value"
-              :class="{ active: settings.preset === p.value }"
-              :disabled="activeCount > 0"
-              @click="settings.preset = p.value"
+              v-for="o in f.options"
+              :key="o.value"
+              :class="{ active: settings[f.key] === o.value }"
+              :disabled="runningCount > 0"
+              @click="settings[f.key] = o.value"
             >
-              {{ p.label }}
+              {{ o.label }}
             </button>
           </div>
-          <div class="setting-hint">{{ presets.find((p) => p.value === settings.preset).hint }}</div>
-        </div>
 
-        <div class="setting">
-          <div class="setting-label">分辨率</div>
-          <div class="segmented">
-            <button
-              v-for="r in resolutions"
-              :key="r.value"
-              :class="{ active: settings.maxHeight === r.value }"
-              :disabled="activeCount > 0"
-              @click="settings.maxHeight = r.value"
-            >
-              {{ r.label }}
-            </button>
-          </div>
-          <div class="setting-hint">{{ settings.maxHeight ? '超过该分辨率时缩小' : '保持原分辨率' }}</div>
-        </div>
+          <input
+            v-else-if="f.type === 'time'"
+            type="text"
+            class="time-input"
+            :placeholder="f.placeholder"
+            v-model.trim="settings[f.key]"
+            :disabled="runningCount > 0"
+            spellcheck="false"
+          />
 
-        <div class="setting">
-          <div class="setting-label">音频</div>
-          <div class="segmented">
-            <button :class="{ active: settings.audioMode === 'aac' }" :disabled="activeCount > 0" @click="settings.audioMode = 'aac'">压缩</button>
-            <button :class="{ active: settings.audioMode === 'copy' }" :disabled="activeCount > 0" @click="settings.audioMode = 'copy'">原样保留</button>
-          </div>
-          <div class="setting-hint">{{ settings.audioMode === 'aac' ? 'AAC 128k，通用兼容' : '不重编码音轨' }}</div>
+          <div class="field-hint">{{ f.hint ? f.hint(settings) : ' ' }}</div>
         </div>
       </section>
 
-      <!-- 拖放区 -->
-      <section v-if="items.length === 0" class="dropzone" @click="pickFiles">
-        <div class="dropzone-icon">🎬</div>
+      <!-- 空状态拖放区 -->
+      <section v-if="toolItems.length === 0" class="dropzone" @click="pickFiles">
+        <div class="dropzone-art">
+          <span class="dropzone-icon" v-html="ICONS[tool.icon]"></span>
+        </div>
         <div class="dropzone-title">拖入视频文件，或点击选择</div>
-        <div class="dropzone-hint">支持 MP4 / MOV / MKV / AVI / FLV / WebM 等格式，压缩后不覆盖原文件</div>
+        <div class="dropzone-hint">支持 MP4 / MOV / MKV / AVI / FLV / WebM 等格式 · 输出不覆盖原文件</div>
       </section>
 
       <!-- 队列 -->
       <section v-else class="queue">
         <div class="queue-head">
           <div class="queue-title">
-            文件队列 <span class="count">{{ items.length }}</span>
-            <span v-if="totalSaved > 0" class="saved-total">已节省 {{ fmtSize(totalSaved) }}</span>
+            任务
+            <span class="count">{{ toolItems.length }}</span>
+            <span v-if="tool.compare && doneItems.length" class="saved-total">
+              共节省 {{ fmtSize(doneItems.reduce((s, i) => s + Math.max(0, i.inSize - i.outSize), 0)) }}
+            </span>
           </div>
           <div class="queue-actions">
-            <button class="btn ghost" @click="clearFinished" v-if="doneItems.length">清除已完成</button>
-            <button class="btn ghost" @click="pickFiles">+ 添加视频</button>
+            <button v-if="doneItems.length" class="btn ghost" @click="clearFinished">清除已完成</button>
+            <button class="btn ghost" @click="pickFiles">
+              <span class="btn-icon" v-html="ICONS.plus"></span>添加
+            </button>
             <button class="btn primary" :disabled="readyItems.length === 0 || !ffmpeg?.found" @click="startAll">
-              开始压缩{{ readyItems.length > 1 ? ` (${readyItems.length})` : '' }}
+              {{ tool.action }}{{ readyItems.length > 1 ? ` (${readyItems.length})` : '' }}
             </button>
           </div>
         </div>
 
-        <div class="item card" v-for="item in items" :key="item.uid">
-          <div class="item-main">
-            <div class="item-name" :title="item.path">{{ item.name }}</div>
-            <div class="item-meta">
-              <template v-if="!item.error">
+        <TransitionGroup name="list" tag="div" class="items">
+          <div class="item" v-for="item in toolItems" :key="item.uid">
+            <div class="item-main">
+              <div class="item-name" :title="item.path">{{ item.name }}</div>
+              <div class="item-meta" v-if="!item.error || item.width">
                 {{ item.width }}×{{ item.height }} · {{ item.codec }} · {{ fmtDuration(item.duration) }} · {{ fmtSize(item.size) }}
-              </template>
-            </div>
-
-            <!-- 进行中 -->
-            <div v-if="item.status === 'running'" class="progress-row">
-              <div class="progress-bar">
-                <div class="progress-fill" :style="{ width: item.percent + '%' }"></div>
               </div>
-              <span class="progress-text">{{ item.percent.toFixed(0) }}% · {{ item.speed }} {{ fmtEta(item.eta) }}</span>
+
+              <!-- 进行中 -->
+              <div v-if="item.status === 'running'" class="progress-row">
+                <div class="progress-bar" :class="{ indeterminate: item.percent < 0 }">
+                  <div class="progress-fill" :style="item.percent >= 0 ? { width: item.percent + '%' } : {}"></div>
+                </div>
+                <span v-if="item.percent >= 0" class="progress-text">
+                  {{ item.percent.toFixed(0) }}% · {{ item.speed }} {{ fmtEta(item.eta) }}
+                </span>
+                <span v-else class="progress-text">处理中…</span>
+              </div>
+
+              <!-- 完成 -->
+              <div v-else-if="item.status === 'done'" class="result">
+                <template v-if="tool.compare">
+                  <span class="size-before">{{ fmtSize(item.inSize) }}</span>
+                  <span class="arrow">→</span>
+                  <span class="size-after">{{ fmtSize(item.outSize) }}</span>
+                  <span class="badge success" v-if="savedPct(item) > 0">瘦身 {{ savedPct(item) }}%</span>
+                  <span class="badge warn" v-else>未变小，原文件已高度压缩</span>
+                </template>
+                <template v-else>
+                  <span class="badge success">完成</span>
+                  <span class="out-name">{{ baseName(item.output) }}</span>
+                  <span class="out-size">{{ fmtSize(item.outSize) }}</span>
+                </template>
+              </div>
+
+              <div v-else-if="item.status === 'error'" class="result">
+                <span class="badge danger" :title="item.message">{{ item.message }}</span>
+              </div>
+
+              <div v-else-if="item.status === 'cancelled'" class="result">
+                <span class="badge gray">已取消</span>
+              </div>
+
+              <div v-else-if="item.status === 'queued'" class="result">
+                <span class="badge gray">排队中…</span>
+              </div>
             </div>
 
-            <!-- 完成 -->
-            <div v-else-if="item.status === 'done'" class="result">
-              <span class="size-before">{{ fmtSize(item.inSize) }}</span>
-              <span class="arrow">→</span>
-              <span class="size-after">{{ fmtSize(item.outSize) }}</span>
-              <span class="badge success" v-if="savedPct(item) > 0">瘦身 {{ savedPct(item) }}%</span>
-              <span class="badge warn" v-else>未变小，原文件已高度压缩</span>
-            </div>
-
-            <!-- 错误 -->
-            <div v-else-if="item.status === 'error'" class="result">
-              <span class="badge danger" :title="item.message">失败：{{ item.message }}</span>
-            </div>
-
-            <div v-else-if="item.status === 'cancelled'" class="result">
-              <span class="badge gray">已取消</span>
-            </div>
-
-            <div v-else-if="item.status === 'queued'" class="result">
-              <span class="badge gray">排队中…</span>
+            <div class="item-actions">
+              <button v-if="['queued', 'running'].includes(item.status)" class="btn ghost small" @click="cancel(item)">取消</button>
+              <button v-if="item.status === 'done'" class="btn ghost small" @click="revealFile(item.output)">显示文件</button>
+              <button v-if="['error', 'cancelled'].includes(item.status) && item.width" class="btn ghost small" @click="retry(item)">重试</button>
+              <button v-if="!['queued', 'running'].includes(item.status)" class="btn ghost small quiet" @click="remove(item)">移除</button>
             </div>
           </div>
-
-          <div class="item-actions">
-            <button v-if="['queued', 'running'].includes(item.status)" class="btn ghost small" @click="cancel(item)">取消</button>
-            <button v-if="item.status === 'done'" class="btn ghost small" @click="reveal(item.output)">显示文件</button>
-            <button v-if="!['queued', 'running'].includes(item.status)" class="btn ghost small" @click="remove(item)">移除</button>
-          </div>
-        </div>
+        </TransitionGroup>
       </section>
     </main>
 
-    <footer class="footer">作者：云中江树 · 微信公众号「云中江树」 · 基于 FFmpeg，开源免费</footer>
-
     <!-- 拖拽遮罩 -->
     <div v-if="dragging" class="drag-overlay">
-      <div class="drag-overlay-text">松手，把视频交给我</div>
+      <div class="drag-overlay-text">松手，交给轻影</div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.page {
+.app {
   height: 100vh;
   display: flex;
-  flex-direction: column;
   overflow: hidden;
 }
 
-/* 顶栏 */
-.topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px 24px;
-  background: #fff;
-  border-bottom: 1px solid var(--border);
+/* ============ 侧栏 ============ */
+.sidebar {
+  width: 216px;
   flex-shrink: 0;
+  background: #fff;
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding: 20px 12px 16px;
 }
+
 .brand {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 11px;
+  padding: 0 10px 20px;
 }
-.logo {
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
-  background: linear-gradient(135deg, #1664ff, #00c8ff);
-  color: #fff;
-  font-size: 20px;
+.brand-logo {
+  width: 38px;
+  height: 38px;
+  display: block;
+  filter: drop-shadow(0 3px 8px rgba(22, 100, 255, 0.35));
+}
+.brand-logo :deep(svg) {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.brand-name {
+  font-size: 17px;
   font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+}
+.brand-sub {
+  font-size: 11px;
+  color: var(--text-3);
+  letter-spacing: 0.04em;
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+}
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 9px 12px;
+  border-radius: var(--radius);
+  font-size: 13.5px;
+  color: var(--text-2);
+  transition: background 0.18s, color 0.18s, transform 0.12s;
+  text-align: left;
+}
+.nav-item:hover {
+  background: var(--fill-1);
+  color: var(--text-1);
+}
+.nav-item:active {
+  transform: scale(0.98);
+}
+.nav-item.active {
+  background: var(--primary-light);
+  color: var(--primary);
+  font-weight: 600;
+}
+.nav-icon {
+  width: 19px;
+  height: 19px;
+  flex-shrink: 0;
+}
+.nav-icon :deep(svg) {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.nav-label {
+  flex: 1;
+}
+.nav-badge {
+  min-width: 17px;
+  height: 17px;
+  padding: 0 5px;
+  border-radius: 99px;
+  background: var(--primary);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 600;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 4px 10px rgba(22, 100, 255, 0.3);
+  font-variant-numeric: tabular-nums;
 }
-.title {
-  font-size: 17px;
-  font-weight: 600;
-}
-.title .en {
-  font-size: 13px;
-  color: var(--text-3);
-  font-weight: 400;
-  margin-left: 4px;
-}
-.subtitle {
+
+.sidebar-foot {
+  padding: 12px 10px 0;
+  border-top: 1px solid var(--border);
   font-size: 12px;
-  color: var(--text-3);
+  color: var(--text-2);
 }
-/* 主区域 */
-.main {
+.sidebar-foot-sub {
+  font-size: 11px;
+  color: var(--text-3);
+  margin-top: 1px;
+}
+
+/* ============ 主区 ============ */
+.content {
   flex: 1;
+  min-width: 0;
   overflow-y: auto;
-  padding: 20px 24px;
+  padding: 26px 28px 20px;
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+.tool-head h1 {
+  font-size: 21px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+}
+.tool-head p {
+  font-size: 13px;
+  color: var(--text-3);
+  margin-top: 3px;
 }
 
 .alert {
@@ -406,90 +531,135 @@ function savedPct(item) {
   font-size: 13px;
 }
 
-.card {
-  background: #fff;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-
 /* 参数面板 */
-.settings {
+.panel {
+  background: #fff;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  padding: 18px 22px 13px;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 20px;
-  padding: 18px 20px 14px;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 18px 26px;
   flex-shrink: 0;
 }
-.setting-label {
+.field-label {
   font-size: 13px;
+  font-weight: 500;
   color: var(--text-2);
-  margin-bottom: 8px;
+  margin-bottom: 9px;
+  font-variant-numeric: tabular-nums;
 }
-.setting-label b {
-  color: var(--primary);
-}
-.setting-hint {
-  font-size: 11px;
+.field-hint {
+  font-size: 11.5px;
   color: var(--text-3);
-  margin-top: 6px;
+  margin-top: 7px;
+  min-height: 16px;
 }
-.setting input[type='range'] {
+.field input[type='range'] {
   width: 100%;
   accent-color: var(--primary);
+  cursor: pointer;
 }
 
 .segmented {
   display: flex;
   background: var(--fill-2);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   padding: 3px;
   gap: 2px;
 }
 .segmented button {
   flex: 1;
-  padding: 5px 0;
-  font-size: 12px;
-  border-radius: 6px;
+  padding: 5.5px 4px;
+  font-size: 12.5px;
+  border-radius: 5px;
   color: var(--text-2);
-  transition: all 0.15s;
+  transition: all 0.16s;
   white-space: nowrap;
+}
+.segmented button:hover:not(.active):not(:disabled) {
+  color: var(--text-1);
 }
 .segmented button.active {
   background: #fff;
   color: var(--primary);
   font-weight: 600;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 1px 4px rgba(26, 34, 51, 0.1);
 }
 .segmented button:disabled {
   cursor: not-allowed;
-  opacity: 0.6;
+  opacity: 0.55;
+}
+
+.time-input {
+  width: 100%;
+  padding: 6.5px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-1);
+  background: #fff;
+  transition: border-color 0.16s, box-shadow 0.16s;
+}
+.time-input:hover {
+  border-color: #c9d2e3;
+}
+.time-input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(22, 100, 255, 0.12);
+  outline: none;
+}
+.time-input:disabled {
+  background: var(--fill-1);
+  color: var(--text-3);
 }
 
 /* 拖放区 */
 .dropzone {
   flex: 1;
-  border: 2px dashed var(--border);
-  border-radius: 14px;
+  min-height: 240px;
+  border: 1.5px dashed #cfd8e8;
+  border-radius: var(--radius-lg);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  background: #fff;
+  gap: 6px;
   cursor: pointer;
-  transition: all 0.2s;
-  min-height: 220px;
+  transition: border-color 0.2s, background 0.2s;
+  background: rgba(255, 255, 255, 0.55);
 }
 .dropzone:hover,
-.page.dragging .dropzone {
+.app.dragging .dropzone {
   border-color: var(--primary);
+  background: var(--primary-lighter);
+}
+.dropzone-art {
+  width: 68px;
+  height: 68px;
+  border-radius: 20px;
   background: var(--primary-light);
+  color: var(--primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 10px;
+  transition: transform 0.25s;
+}
+.dropzone:hover .dropzone-art {
+  transform: translateY(-3px) scale(1.04);
 }
 .dropzone-icon {
-  font-size: 44px;
+  width: 32px;
+  height: 32px;
+}
+.dropzone-icon :deep(svg) {
+  width: 100%;
+  height: 100%;
 }
 .dropzone-title {
-  font-size: 16px;
+  font-size: 15.5px;
   font-weight: 600;
 }
 .dropzone-hint {
@@ -501,7 +671,7 @@ function savedPct(item) {
 .queue {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
 }
 .queue-head {
   display: flex;
@@ -509,26 +679,27 @@ function savedPct(item) {
   justify-content: space-between;
 }
 .queue-title {
-  font-size: 15px;
+  font-size: 14.5px;
   font-weight: 600;
   display: flex;
   align-items: center;
   gap: 8px;
 }
 .count {
-  font-size: 12px;
+  font-size: 11.5px;
   color: var(--text-3);
   background: var(--fill-2);
   padding: 1px 8px;
-  border-radius: 999px;
-  font-weight: 400;
+  border-radius: 99px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
 }
 .saved-total {
   font-size: 12px;
   color: var(--success);
   background: var(--success-light);
-  padding: 1px 8px;
-  border-radius: 999px;
+  padding: 1px 9px;
+  border-radius: 99px;
   font-weight: 500;
 }
 .queue-actions {
@@ -536,20 +707,28 @@ function savedPct(item) {
   gap: 8px;
 }
 
+/* 按钮 */
 .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   padding: 7px 16px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   font-size: 13px;
-  transition: all 0.15s;
+  transition: all 0.16s;
+}
+.btn:active:not(:disabled) {
+  transform: scale(0.97);
 }
 .btn.primary {
   background: var(--primary);
   color: #fff;
   font-weight: 500;
-  box-shadow: 0 2px 6px rgba(22, 100, 255, 0.3);
+  box-shadow: var(--shadow-pop);
 }
 .btn.primary:hover:not(:disabled) {
   background: var(--primary-hover);
+  transform: translateY(-1px);
 }
 .btn.primary:disabled {
   opacity: 0.4;
@@ -558,39 +737,69 @@ function savedPct(item) {
 }
 .btn.ghost {
   color: var(--text-2);
-  border: 1px solid var(--border);
   background: #fff;
+  border: 1px solid var(--border);
 }
 .btn.ghost:hover {
   color: var(--primary);
-  border-color: var(--primary);
+  border-color: rgba(22, 100, 255, 0.4);
 }
 .btn.small {
-  padding: 4px 12px;
+  padding: 4px 11px;
   font-size: 12px;
 }
+.btn.quiet {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-3);
+}
+.btn.quiet:hover {
+  color: var(--danger);
+  border-color: transparent;
+  background: var(--danger-light);
+}
+.btn-icon {
+  width: 13px;
+  height: 13px;
+  display: block;
+}
+.btn-icon :deep(svg) {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
 
+/* 任务卡片 */
+.items {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
 .item {
   display: flex;
   align-items: center;
-  padding: 14px 18px;
   gap: 16px;
+  background: #fff;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  padding: 13px 18px;
 }
 .item-main {
   flex: 1;
   min-width: 0;
 }
 .item-name {
-  font-size: 14px;
+  font-size: 13.5px;
   font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .item-meta {
-  font-size: 12px;
+  font-size: 11.5px;
   color: var(--text-3);
   margin-top: 2px;
+  font-variant-numeric: tabular-nums;
 }
 .item-actions {
   display: flex;
@@ -598,24 +807,39 @@ function savedPct(item) {
   flex-shrink: 0;
 }
 
+/* 进度 */
 .progress-row {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-top: 8px;
+  margin-top: 9px;
 }
 .progress-bar {
   flex: 1;
   height: 6px;
   background: var(--fill-2);
-  border-radius: 999px;
+  border-radius: 99px;
   overflow: hidden;
+  position: relative;
 }
 .progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, #1664ff, #00c8ff);
-  border-radius: 999px;
-  transition: width 0.3s;
+  background: linear-gradient(90deg, #3d7fff, var(--primary));
+  border-radius: 99px;
+  transition: width 0.35s ease;
+}
+.progress-bar.indeterminate .progress-fill {
+  position: absolute;
+  width: 36%;
+  animation: slide 1.1s ease-in-out infinite;
+}
+@keyframes slide {
+  0% {
+    left: -36%;
+  }
+  100% {
+    left: 100%;
+  }
 }
 .progress-text {
   font-size: 12px;
@@ -624,27 +848,43 @@ function savedPct(item) {
   font-variant-numeric: tabular-nums;
 }
 
+/* 结果 */
 .result {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 6px;
+  margin-top: 7px;
   font-size: 13px;
+  min-width: 0;
 }
 .size-before {
   color: var(--text-3);
   text-decoration: line-through;
+  font-variant-numeric: tabular-nums;
 }
 .arrow {
   color: var(--text-3);
 }
 .size-after {
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.out-name {
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.out-size {
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
 }
 .badge {
   font-size: 12px;
-  padding: 1px 8px;
-  border-radius: 4px;
+  padding: 1.5px 9px;
+  border-radius: 5px;
+  flex-shrink: 0;
 }
 .badge.success {
   color: var(--success);
@@ -653,52 +893,64 @@ function savedPct(item) {
 }
 .badge.warn {
   color: var(--warning);
-  background: #fff3e8;
+  background: var(--warning-light);
 }
 .badge.danger {
   color: var(--danger);
   background: var(--danger-light);
-  max-width: 480px;
+  max-width: 520px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex-shrink: 1;
 }
 .badge.gray {
   color: var(--text-3);
   background: var(--fill-2);
 }
 
-/* 底栏 */
-.footer {
-  text-align: center;
-  font-size: 12px;
-  color: var(--text-3);
-  padding: 10px;
-  border-top: 1px solid var(--border);
-  background: #fff;
-  flex-shrink: 0;
+/* 列表动画 */
+.list-enter-active {
+  transition: all 0.3s ease;
+}
+.list-leave-active {
+  transition: all 0.2s ease;
+  position: absolute;
+  width: 100%;
+}
+.list-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+.list-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+.list-move {
+  transition: transform 0.25s ease;
 }
 
 /* 拖拽遮罩 */
 .drag-overlay {
   position: fixed;
-  inset: 0;
-  background: rgba(22, 100, 255, 0.08);
-  border: 3px dashed var(--primary);
-  border-radius: 12px;
+  inset: 10px;
+  background: rgba(22, 100, 255, 0.07);
+  backdrop-filter: blur(2px);
+  border: 2px dashed var(--primary);
+  border-radius: 16px;
   display: flex;
   align-items: center;
   justify-content: center;
   pointer-events: none;
-  z-index: 10;
+  z-index: 50;
 }
 .drag-overlay-text {
-  font-size: 20px;
+  font-size: 19px;
   font-weight: 600;
   color: var(--primary);
   background: #fff;
-  padding: 14px 32px;
-  border-radius: 12px;
-  box-shadow: 0 8px 30px rgba(22, 100, 255, 0.25);
+  padding: 14px 34px;
+  border-radius: 14px;
+  box-shadow: 0 12px 40px rgba(22, 100, 255, 0.28);
 }
 </style>

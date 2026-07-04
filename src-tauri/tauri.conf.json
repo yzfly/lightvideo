@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "SlimVideo",
+  "productName": "LightVideo",
   "version": "1.0.0",
-  "identifier": "com.yzfly.slimvideo",
+  "identifier": "com.yzfly.lightvideo",
   "build": {
     "frontendDist": "../frontend/dist",
     "devUrl": "http://localhost:5173",
@@ -12,11 +12,11 @@
   "app": {
     "windows": [
       {
-        "title": "视频瘦身 SlimVideo",
-        "width": 980,
+        "title": "轻影 LightVideo",
+        "width": 1060,
         "height": 720,
-        "minWidth": 760,
-        "minHeight": 560,
+        "minWidth": 860,
+        "minHeight": 600,
         "resizable": true,
         "fullscreen": false,
         "dragDropEnabled": true

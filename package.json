@@ -1,7 +1,7 @@
 {
-  "name": "slim-video",
+  "name": "lightvideo",
   "version": "1.0.0",
-  "description": "视频瘦身 SlimVideo - 无损画质，极限压缩。基于 ffmpeg 的桌面视频压缩工具。",
+  "description": "轻影 LightVideo - FFmpeg 视频工具箱。压缩、转格式、提取音频、剪辑、转 GIF、截图。",
   "private": true,
   "scripts": {
     "tauri": "tauri",

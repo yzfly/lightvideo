@@ -1,18 +1,18 @@
 use std::path::Path;
 
-/// 生成不冲突的输出路径: video.mov -> video_slim.mp4
+/// 生成不冲突的输出路径: (video.mov, "_slim", "mp4") -> video_slim.mp4
 #[tauri::command]
-fn output_path(input: String) -> String {
+fn output_path(input: String, suffix: String, ext: String) -> String {
     let p = Path::new(&input);
     let dir = p.parent().unwrap_or_else(|| Path::new("."));
     let stem = p
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "video".into());
-    let mut out = dir.join(format!("{stem}_slim.mp4"));
+    let mut out = dir.join(format!("{stem}{suffix}.{ext}"));
     let mut i = 2;
     while out.exists() {
-        out = dir.join(format!("{stem}_slim_{i}.mp4"));
+        out = dir.join(format!("{stem}{suffix}_{i}.{ext}"));
         i += 1;
     }
     out.to_string_lossy().to_string()

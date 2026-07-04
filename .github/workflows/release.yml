@@ -63,8 +63,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: '视频瘦身 SlimVideo ${{ github.ref_name }}'
-          releaseBody: '下载对应平台的安装包即可使用。macOS 首次打开如提示无法验证开发者，请右键应用选择打开。'
+          releaseName: '轻影 LightVideo ${{ github.ref_name }}'
+          releaseBody: 'FFmpeg 视频工具箱：压缩 / 转格式 / 提取音频 / 剪辑 / 转 GIF / 截图。下载对应平台的安装包即可使用。'
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
