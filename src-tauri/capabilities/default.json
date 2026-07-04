@@ -1,0 +1,25 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "主窗口权限: 对话框 + ffmpeg/ffprobe sidecar",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "shell:allow-kill",
+    {
+      "identifier": "shell:allow-spawn",
+      "allow": [
+        { "name": "binaries/ffmpeg", "sidecar": true, "args": true },
+        { "name": "binaries/ffprobe", "sidecar": true, "args": true }
+      ]
+    },
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        { "name": "binaries/ffmpeg", "sidecar": true, "args": true },
+        { "name": "binaries/ffprobe", "sidecar": true, "args": true }
+      ]
+    }
+  ]
+}

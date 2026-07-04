@@ -1,0 +1,51 @@
+:root {
+    --primary: #1664ff;
+    --primary-hover: #0e4fd1;
+    --primary-light: #eaf1ff;
+    --success: #00b42a;
+    --success-light: #e8ffea;
+    --danger: #f53f3f;
+    --danger-light: #ffece8;
+    --warning: #ff7d00;
+    --text-1: #1d2129;
+    --text-2: #4e5969;
+    --text-3: #86909c;
+    --border: #e5e6eb;
+    --fill-1: #f7f8fa;
+    --fill-2: #f2f3f5;
+    --radius: 10px;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html,
+body {
+    height: 100%;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC',
+    'Microsoft YaHei', 'Segoe UI', sans-serif;
+    color: var(--text-1);
+    background: var(--fill-1);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+    cursor: default;
+}
+
+#app {
+    height: 100%;
+}
+
+button {
+    font-family: inherit;
+    border: none;
+    background: none;
+    cursor: pointer;
+}

@@ -1,0 +1,16 @@
+{
+  "name": "slim-video",
+  "version": "1.0.0",
+  "description": "视频瘦身 SlimVideo - 无损画质，极限压缩。基于 ffmpeg 的桌面视频压缩工具。",
+  "private": true,
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "author": "云中江树",
+  "license": "CC-BY-NC-4.0",
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4"
+  }
+}
