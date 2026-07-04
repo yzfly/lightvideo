@@ -98,6 +98,72 @@ function toSrt(segs) {
   return segs.map((g, i) => `${i + 1}\n${srtTs(g.start)} --> ${srtTs(g.end)}\n${g.text}\n`).join('\n')
 }
 
+const PATH_SEP = navigator.platform.includes('Win') ? '\\' : '/'
+
+// 模型就位 (按需下载, 断点续传, 镜像回退); 占进度 fromPct-toPct
+async function ensureAsrModels(ctx, fromPct, toPct) {
+  const dir = await asrDir()
+  const totalBytes = ASR_FILES.reduce((t, f) => t + f.size, 0)
+  let doneBytes = 0
+  for (const f of ASR_FILES) {
+    const dest = dir + PATH_SEP + f.name
+    if ((await fileSize(dest)) !== f.size) {
+      ctx.setStage('首次使用：下载语音模型（共约 230MB，支持断点续传）')
+      const ok = await downloadFile(f.urls, dest, f.size, (pct) => {
+        ctx.onProgress(fromPct + ((doneBytes + (f.size * pct) / 100) / totalBytes) * (toPct - fromPct))
+      }, ctx.setChild)
+      if (ctx.cancelled()) return null
+      if (!ok) throw new Error('模型下载失败，请检查网络后点击重试（已下载部分会续传）')
+    }
+    doneBytes += f.size
+  }
+  return dir
+}
+
+// 抽 16k 单声道 wav; 占进度 fromPct-toPct
+async function extractWav(item, ctx, fromPct, toPct) {
+  ctx.setStage('提取音频')
+  const wav = await tempPath(`lightvideo-asr-${item.uid}.wav`)
+  const { child, done } = await runFFmpeg(
+    ['-y', '-i', item.path, '-vn', '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', wav],
+    item.duration * 1e6,
+    (p) => ctx.onProgress(fromPct + Math.max(0, p.percent) * ((toPct - fromPct) / 100))
+  )
+  ctx.setChild(child)
+  const r = await done
+  ctx.setChild(null)
+  if (ctx.cancelled()) return null
+  if (!r.ok) throw new Error(r.message)
+  return wav
+}
+
+// 本地识别; 占进度 fromPct-toPct, 返回分段
+async function recognizeWav(dir, wav, lang, item, ctx, fromPct, toPct) {
+  ctx.setStage('AI 识别中')
+  const { child, done } = await runAsr(
+    [
+      `--silero-vad-model=${dir}${PATH_SEP}silero_vad.onnx`,
+      `--sense-voice-model=${dir}${PATH_SEP}model.int8.onnx`,
+      `--tokens=${dir}${PATH_SEP}tokens.txt`,
+      '--sense-voice-use-itn=1',
+      '--silero-vad-max-speech-duration=8',
+      `--sense-voice-language=${lang}`,
+      '--num-threads=4',
+      wav,
+    ],
+    (seg) => ctx.onProgress(fromPct + Math.min(1, seg.end / item.duration) * (toPct - fromPct))
+  )
+  ctx.setChild(child)
+  const r = await done
+  ctx.setChild(null)
+  removeFile(wav)
+  if (ctx.cancelled()) return null
+  if (r.segs.length === 0) {
+    throw new Error(r.ok ? '没有识别到人声' : '识别失败：' + r.message)
+  }
+  return r.segs
+}
+
 export const TOOLS = [
   // ================= 视频处理 =================
   {
@@ -675,68 +741,16 @@ export const TOOLS = [
       if (!item.audioCodec) return '该视频没有音轨'
     },
     async run(item, s, ctx) {
-      // 1. 模型就位 (按需下载, 支持断点续传与镜像回退)
-      const dir = await asrDir()
-      const sep = navigator.platform.includes('Win') ? '\\' : '/'
-      const totalBytes = ASR_FILES.reduce((t, f) => t + f.size, 0)
-      let doneBytes = 0
-      for (const f of ASR_FILES) {
-        const dest = dir + sep + f.name
-        if ((await fileSize(dest)) !== f.size) {
-          ctx.setStage('首次使用：下载语音模型（共约 230MB，支持断点续传）')
-          const ok = await downloadFile(f.urls, dest, f.size, (pct) => {
-            ctx.onProgress(((doneBytes + (f.size * pct) / 100) / totalBytes) * 30)
-          }, ctx.setChild)
-          if (ctx.cancelled()) return null
-          if (!ok) throw new Error('模型下载失败，请检查网络后点击重试（已下载部分会续传）')
-        }
-        doneBytes += f.size
-      }
+      const dir = await ensureAsrModels(ctx, 0, 30)
+      if (dir === null) return null
+      const wav = await extractWav(item, ctx, 30, 35)
+      if (wav === null) return null
+      const segs = await recognizeWav(dir, wav, s.lang, item, ctx, 35, s.mode === 'burn' ? 60 : 95)
+      if (segs === null) return null
 
-      // 2. 提取 16k 单声道音频
-      ctx.setStage('提取音频')
-      const wav = await tempPath(`lightvideo-asr-${item.uid}.wav`)
-      {
-        const { child, done } = await runFFmpeg(
-          ['-y', '-i', item.path, '-vn', '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', wav],
-          item.duration * 1e6,
-          (p) => ctx.onProgress(30 + Math.max(0, p.percent) * 0.05)
-        )
-        ctx.setChild(child)
-        const r = await done
-        ctx.setChild(null)
-        if (ctx.cancelled()) return null
-        if (!r.ok) throw new Error(r.message)
-      }
-
-      // 3. 本地识别
-      ctx.setStage('AI 识别中')
-      const asrEnd = s.mode === 'burn' ? 60 : 95
-      const { child, done } = await runAsr(
-        [
-          `--silero-vad-model=${dir}${sep}silero_vad.onnx`,
-          `--sense-voice-model=${dir}${sep}model.int8.onnx`,
-          `--tokens=${dir}${sep}tokens.txt`,
-          '--sense-voice-use-itn=1',
-          '--silero-vad-max-speech-duration=8',
-          `--sense-voice-language=${s.lang}`,
-          '--num-threads=4',
-          wav,
-        ],
-        (seg) => ctx.onProgress(35 + Math.min(1, seg.end / item.duration) * (asrEnd - 35))
-      )
-      ctx.setChild(child)
-      const r = await done
-      ctx.setChild(null)
-      removeFile(wav)
-      if (ctx.cancelled()) return null
-      if (r.segs.length === 0) {
-        throw new Error(r.ok ? '没有识别到人声' : '识别失败：' + r.message)
-      }
-
-      // 4. 生成 SRT
+      // 生成 SRT
       const srtPath = await ctx.outPath('', 'srt')
-      await writeTextFile(srtPath, toSrt(r.segs))
+      await writeTextFile(srtPath, toSrt(segs))
       if (s.mode === 'srt') {
         return { output: srtPath, outSize: await fileSize(srtPath) }
       }
@@ -756,6 +770,51 @@ export const TOOLS = [
       if (ctx.cancelled()) return null
       if (!r2.ok) throw new Error(r2.message)
       return { output: out, outSize: r2.outSize }
+    },
+  },
+
+  {
+    id: 'transcribe',
+    group: '字幕',
+    name: '录音转文字',
+    desc: '会议录音、语音备忘、播客，本地 AI 转成文字稿，不联网不上传',
+    icon: 'transcribe',
+    action: '开始转写',
+    accept: 'media', // 音频为主, 视频也收
+    check: (info) => (!info.audioCodec ? '文件里没有声音' : ''),
+    defaults: { lang: 'auto', format: 'txt' },
+    fields: [
+      {
+        key: 'lang', type: 'segmented', label: '语言',
+        options: [
+          { value: 'auto', label: '自动' },
+          { value: 'zh', label: '中文' },
+          { value: 'en', label: 'English' },
+          { value: 'yue', label: '粤语' },
+        ],
+        hint: () => '首次使用需下载语音模型（约 230MB），之后完全离线',
+      },
+      {
+        key: 'format', type: 'segmented', label: '输出格式',
+        options: [
+          { value: 'txt', label: '纯文本' },
+          { value: 'srt', label: '带时间戳 SRT' },
+        ],
+        hint: (s) => (s.format === 'txt' ? '按语句分行的文字稿' : '每句话带起止时间，可当字幕用'),
+      },
+    ],
+    async run(item, s, ctx) {
+      const dir = await ensureAsrModels(ctx, 0, 30)
+      if (dir === null) return null
+      const wav = await extractWav(item, ctx, 30, 35)
+      if (wav === null) return null
+      const segs = await recognizeWav(dir, wav, s.lang, item, ctx, 35, 98)
+      if (segs === null) return null
+
+      const out = await ctx.outPath('', s.format)
+      const content = s.format === 'srt' ? toSrt(segs) : segs.map((g) => g.text).join('\n') + '\n'
+      await writeTextFile(out, content)
+      return { output: out, outSize: await fileSize(out) }
     },
   },
 

@@ -3,8 +3,9 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import {
-  checkFFmpeg, pickVideos, pickFile, probe, runFFmpeg,
-  outputPath, revealFile, removeFile, tempPath, isVideo,
+  checkFFmpeg, pickMedia, pickFile, probe, runFFmpeg,
+  outputPath, revealFile, removeFile, tempPath, hasExt,
+  VIDEO_EXTS, AUDIO_EXTS,
 } from './backend.js'
 import { TOOLS, TOOL_GROUPS } from './tools.js'
 import { ICONS } from './icons.js'
@@ -17,6 +18,12 @@ const tool = computed(() => TOOLS.find((t) => t.id === currentId.value))
 const allSettings = reactive(Object.fromEntries(TOOLS.map((t) => [t.id, { ...t.defaults }])))
 const settings = computed(() => allSettings[currentId.value])
 const visibleFields = computed(() => tool.value.fields.filter((f) => !f.showIf || f.showIf(settings.value)))
+
+// 工具声明自己收什么文件: 默认视频; 'media' = 音频+视频
+const acceptExts = computed(() =>
+  tool.value.accept === 'media' ? [...AUDIO_EXTS, ...VIDEO_EXTS] : VIDEO_EXTS
+)
+const acceptLabel = computed(() => (tool.value.accept === 'media' ? '音频或视频文件' : '视频文件'))
 
 // ---------- 文件队列 (全局串行，按工具归属展示) ----------
 const items = ref([])
@@ -44,13 +51,18 @@ function activeBadge(toolId) {
 
 async function addPaths(paths) {
   groupError.value = ''
+  const t = tool.value
   for (const path of paths) {
-    if (!isVideo(path)) continue
+    if (!hasExt(path, acceptExts.value)) continue
     const dup = items.value.some(
       (i) => i.toolId === currentId.value && i.path === path && ['ready', 'queued', 'running'].includes(i.status) && !i.isJob
     )
     if (dup) continue
     const info = await probe(path)
+    if (!info.error) {
+      // 默认要求有视频画面; 工具可通过 check 自定义 (如录音转文字只要有声音)
+      info.error = t.check ? t.check(info) : !info.width ? '文件中未找到视频画面' : ''
+    }
     items.value.push({
       uid: ++uid,
       toolId: currentId.value,
@@ -71,7 +83,7 @@ async function addPaths(paths) {
 }
 
 async function pickFiles() {
-  await addPaths(await pickVideos())
+  await addPaths(await pickMedia(acceptLabel.value, acceptExts.value))
 }
 
 async function pickAssetFile(field) {
@@ -451,8 +463,11 @@ function baseName(path) {
         <div class="dropzone-art">
           <span class="dropzone-icon" v-html="ICONS[tool.icon]"></span>
         </div>
-        <div class="dropzone-title">{{ tool.multiInput ? '拖入多个视频，按顺序拼接' : '拖入视频文件，或点击选择' }}</div>
-        <div class="dropzone-hint">支持 MP4 / MOV / MKV / AVI / FLV / WebM 等格式 · 输出不覆盖原文件</div>
+        <div class="dropzone-title">{{ tool.multiInput ? '拖入多个视频，按顺序拼接' : `拖入${acceptLabel}，或点击选择` }}</div>
+        <div class="dropzone-hint">
+          {{ tool.accept === 'media' ? '支持 MP3 / M4A / WAV / FLAC 等录音格式，也接受视频' : '支持 MP4 / MOV / MKV / AVI / FLV / WebM 等格式' }}
+          · 输出不覆盖原文件
+        </div>
       </section>
 
       <!-- 队列 -->
@@ -484,6 +499,9 @@ function baseName(path) {
                 <template v-if="item.metaText">{{ item.metaText }}</template>
                 <template v-else-if="item.width">
                   {{ item.width }}×{{ item.height }} · {{ item.codec }} · {{ fmtDuration(item.duration) }} · {{ fmtSize(item.size) }}
+                </template>
+                <template v-else-if="item.audioCodec">
+                  录音 · {{ item.audioCodec }} · {{ fmtDuration(item.duration) }} · {{ fmtSize(item.size) }}
                 </template>
               </div>
 
@@ -543,7 +561,7 @@ function baseName(path) {
               </button>
               <button v-if="['queued', 'running'].includes(item.status)" class="btn ghost small" @click="cancel(item)">取消</button>
               <button v-if="item.status === 'done'" class="btn ghost small" @click="revealFile(item.output)">显示文件</button>
-              <button v-if="['error', 'cancelled'].includes(item.status) && (item.width || item.isJob)" class="btn ghost small" @click="retry(item)">重试</button>
+              <button v-if="['error', 'cancelled'].includes(item.status) && (item.width || item.audioCodec || item.isJob)" class="btn ghost small" @click="retry(item)">重试</button>
               <button v-if="!['queued', 'running'].includes(item.status)" class="btn ghost small quiet" @click="remove(item)">移除</button>
             </div>
           </div>

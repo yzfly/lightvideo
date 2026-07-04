@@ -8,9 +8,11 @@ export const VIDEO_EXTS = [
   'ts', 'mts', 'm2ts', '3gp', 'mpg', 'mpeg', 'rmvb',
 ]
 
-export function isVideo(path) {
+export const AUDIO_EXTS = ['mp3', 'm4a', 'aac', 'wav', 'flac', 'ogg', 'opus', 'wma', 'amr', 'aiff', 'caf']
+
+export function hasExt(path, exts) {
   const ext = path.split('.').pop()?.toLowerCase()
-  return VIDEO_EXTS.includes(ext)
+  return exts.includes(ext)
 }
 
 // 检查内置 ffmpeg 可用性
@@ -23,12 +25,12 @@ export async function checkFFmpeg() {
   }
 }
 
-// 弹出系统文件选择框
-export async function pickVideos() {
+// 弹出系统文件选择框 (按工具声明的输入类型过滤)
+export async function pickMedia(name, extensions) {
   const paths = await open({
     multiple: true,
-    title: '选择视频文件',
-    filters: [{ name: '视频文件', extensions: VIDEO_EXTS }],
+    title: `选择${name}`,
+    filters: [{ name, extensions }],
   })
   if (!paths) return []
   return Array.isArray(paths) ? paths : [paths]
@@ -143,15 +145,14 @@ export async function probe(path) {
     const data = JSON.parse(out.stdout)
     info.size = Number(data.format?.size) || (await invoke('file_size', { path }))
     info.duration = Number(data.format?.duration) || 0
+    // 纯音频文件没有视频流, 是否算错误由工具自己判断 (tool.check)
     const v = (data.streams || []).find((s) => s.codec_type === 'video')
     const a = (data.streams || []).find((s) => s.codec_type === 'audio')
-    if (!v) {
-      info.error = '文件中未找到视频流'
-      return info
+    if (v) {
+      info.width = v.width
+      info.height = v.height
+      info.codec = v.codec_name
     }
-    info.width = v.width
-    info.height = v.height
-    info.codec = v.codec_name
     info.audioCodec = a?.codec_name || ''
   } catch (e) {
     info.error = '解析视频信息失败'
