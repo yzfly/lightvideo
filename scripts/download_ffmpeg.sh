@@ -22,15 +22,22 @@ echo "目标平台: $TRIPLE"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# GNU tar (Windows runner) 解不了 zip, 统一用 python3 的 zipfile 模块
+unzip_py() { python3 -m zipfile -e "$1" "$2"; }
+
 case "$TRIPLE" in
 aarch64-apple-darwin | x86_64-apple-darwin)
-    ARCH="${TRIPLE%%-*}"
+    # martin-riedl.de 的架构命名是 arm64 / amd64, 不是 rust triple 的叫法
+    case "$TRIPLE" in
+    aarch64-*) ARCH=arm64 ;;
+    *) ARCH=amd64 ;;
+    esac
     BASE="https://ffmpeg.martin-riedl.de/redirect/latest/macos/${ARCH}/release"
     for bin in ffmpeg ffprobe; do
         echo "下载 $bin ..."
         curl -fsSL --retry 3 -o "$TMP/$bin.zip" "$BASE/$bin.zip"
-        tar -xf "$TMP/$bin.zip" -C "$TMP"
-        found="$(find "$TMP" -type f -name "$bin" | head -1)"
+        unzip_py "$TMP/$bin.zip" "$TMP/$bin-dir"
+        found="$(find "$TMP/$bin-dir" -type f -name "$bin" | head -1)"
         install -m 755 "$found" "$DEST/$bin-$TRIPLE"
     done
     ;;
@@ -38,9 +45,9 @@ x86_64-pc-windows-msvc)
     URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
     echo "下载 BtbN win64 构建 ..."
     curl -fsSL --retry 3 -o "$TMP/ff.zip" "$URL"
-    tar -xf "$TMP/ff.zip" -C "$TMP"
+    unzip_py "$TMP/ff.zip" "$TMP/ff-dir"
     for bin in ffmpeg ffprobe; do
-        found="$(find "$TMP" -type f -name "$bin.exe" | head -1)"
+        found="$(find "$TMP/ff-dir" -type f -name "$bin.exe" | head -1)"
         install -m 755 "$found" "$DEST/$bin-$TRIPLE.exe"
     done
     ;;

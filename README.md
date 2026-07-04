@@ -10,7 +10,7 @@
 [![平台](https://img.shields.io/badge/平台-macOS%20%7C%20Windows%20%7C%20Linux-1664FF)](../../releases)
 [![Tauri](https://img.shields.io/badge/Tauri-2.0-FFC131?logo=tauri&logoColor=white)](https://v2.tauri.app/)
 [![Vue](https://img.shields.io/badge/Vue-3-42b883?logo=vuedotjs&logoColor=white)](https://vuejs.org/)
-[![License](https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey)](LICENSE)
+[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/yzfly/lightvideo?color=1664FF&label=下载)](../../releases)
 
 [下载安装](../../releases) · [功能一览](#十七个工具) · [从源码构建](#从源码构建) · [常见问题](#常见问题)
@@ -129,9 +129,9 @@ docs/                README 素材与截图 demo 模式 (?demo=<toolId>)
 
 ## 许可
 
-本项目代码采用 [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/deed.zh)（署名-非商业性使用）。
+本项目采用 [MIT](LICENSE) 协议开源，随便用。
 
-内置 [FFmpeg](https://ffmpeg.org/)（GPL，静态构建来自 [martin-riedl.de](https://ffmpeg.martin-riedl.de/) 与 [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds)）与 [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)（Apache-2.0）。FFmpeg 是 FFmpeg 项目的商标。
+内置 [FFmpeg](https://ffmpeg.org/)（GPL，静态构建来自 [martin-riedl.de](https://ffmpeg.martin-riedl.de/) 与 [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds)，以独立 sidecar 进程调用）与 [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)（Apache-2.0）。FFmpeg 是 FFmpeg 项目的商标。
 
 ## 作者
 

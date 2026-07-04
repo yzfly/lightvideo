@@ -9,7 +9,7 @@
     "build": "tauri build"
   },
   "author": "云中江树",
-  "license": "CC-BY-NC-4.0",
+  "license": "MIT",
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4"
   }
