@@ -27,6 +27,30 @@ export const ICONS = {
   frame: wrap(
     '<path d="M4.2 7.8h2.9l1.9-2.4h6l1.9 2.4h2.9c.8 0 1.5.7 1.5 1.5v8.4c0 .8-.7 1.5-1.5 1.5H4.2c-.8 0-1.5-.7-1.5-1.5V9.3c0-.8.7-1.5 1.5-1.5z"/><circle cx="12" cy="13.2" r="3.4"/>'
   ),
+  // 合并: 两路汇入一路
+  merge: wrap(
+    '<path d="M4 6.5h3.6l4.4 5.5h8"/><path d="M4 17.5h3.6L12 12"/><polyline points="16.8 8.8 20 12 16.8 15.2"/>'
+  ),
+  // 变速: 仪表盘
+  speed: wrap(
+    '<path d="M4.5 16.5a8 8 0 1 1 15 0"/><line x1="12" y1="14" x2="15.8" y2="9.2"/><circle cx="12" cy="14.8" r="1.3" fill="currentColor" stroke="none"/>'
+  ),
+  // 旋转: 循环箭头
+  rotate: wrap(
+    '<path d="M19.5 12a7.5 7.5 0 1 1-2.6-5.7"/><polyline points="17.3 2.8 17.3 6.8 13.3 6.8"/>'
+  ),
+  // 音量: 喇叭
+  volume: wrap(
+    '<path d="M4.5 9.5v5h3.2L12 17.8V6.2L7.7 9.5H4.5z"/><path d="M15.3 9.3a4 4 0 0 1 0 5.4"/><path d="M17.8 7a7.3 7.3 0 0 1 0 10"/>'
+  ),
+  // 背景音乐: 音符 + 加号
+  bgm: wrap(
+    '<path d="M10 17V5.8l6.5 1.6"/><circle cx="7.4" cy="17" r="2.6"/><line x1="18" y1="12.5" x2="18" y2="18.5"/><line x1="15" y1="15.5" x2="21" y2="15.5"/>'
+  ),
+  // 指定大小: 同心圆靶
+  targetsize: wrap(
+    '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4.4"/><circle cx="12" cy="12" r="1.1" fill="currentColor" stroke="none"/>'
+  ),
   // 添加
   plus: wrap('<line x1="12" y1="5.5" x2="12" y2="18.5"/><line x1="5.5" y1="12" x2="18.5" y2="12"/>'),
   // 品牌: 羽翼播放

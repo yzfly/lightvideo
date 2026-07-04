@@ -1,8 +1,11 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
-import { checkFFmpeg, pickVideos, probe, runFFmpeg, outputPath, revealFile, isVideo } from './backend.js'
-import { TOOLS } from './tools.js'
+import {
+  checkFFmpeg, pickVideos, pickFile, probe, runFFmpeg,
+  outputPath, revealFile, removeFile, isVideo,
+} from './backend.js'
+import { TOOLS, TOOL_GROUPS } from './tools.js'
 import { ICONS } from './icons.js'
 
 // ---------- 工具与设置 ----------
@@ -12,29 +15,38 @@ const tool = computed(() => TOOLS.find((t) => t.id === currentId.value))
 // 每个工具各自记忆自己的参数
 const allSettings = reactive(Object.fromEntries(TOOLS.map((t) => [t.id, { ...t.defaults }])))
 const settings = computed(() => allSettings[currentId.value])
+const visibleFields = computed(() => tool.value.fields.filter((f) => !f.showIf || f.showIf(settings.value)))
 
 // ---------- 文件队列 (全局串行，按工具归属展示) ----------
 const items = ref([])
 const ffmpeg = ref(null)
 const dragging = ref(false)
+const groupError = ref('')
 let uid = 0
 let queueRunning = false
 let unlistenDrop = null
 
 const toolItems = computed(() => items.value.filter((i) => i.toolId === currentId.value))
-const readyItems = computed(() => toolItems.value.filter((i) => i.status === 'ready'))
+const readyItems = computed(() => toolItems.value.filter((i) => i.status === 'ready' && !i.isJob))
 const doneItems = computed(() => toolItems.value.filter((i) => i.status === 'done'))
 const runningCount = computed(() => toolItems.value.filter((i) => ['queued', 'running'].includes(i.status)).length)
+
+const startDisabled = computed(() => {
+  if (!ffmpeg.value?.found) return true
+  if (tool.value.multiInput) return readyItems.value.length < 2
+  return readyItems.value.length === 0
+})
 
 function activeBadge(toolId) {
   return items.value.filter((i) => i.toolId === toolId && ['queued', 'running'].includes(i.status)).length
 }
 
 async function addPaths(paths) {
+  groupError.value = ''
   for (const path of paths) {
     if (!isVideo(path)) continue
     const dup = items.value.some(
-      (i) => i.toolId === currentId.value && i.path === path && ['ready', 'queued', 'running'].includes(i.status)
+      (i) => i.toolId === currentId.value && i.path === path && ['ready', 'queued', 'running'].includes(i.status) && !i.isJob
     )
     if (dup) continue
     const info = await probe(path)
@@ -52,6 +64,7 @@ async function addPaths(paths) {
       output: '',
       seconds: 0,
       child: null,
+      isJob: false,
     })
   }
 }
@@ -60,9 +73,44 @@ async function pickFiles() {
   await addPaths(await pickVideos())
 }
 
+async function pickAssetFile(field) {
+  const path = await pickFile(field.pickTitle, field.filterName, field.exts)
+  if (path) settings.value[field.key] = path
+}
+
 function startAll() {
   const t = tool.value
   const s = { ...settings.value }
+  groupError.value = ''
+
+  if (t.multiInput) {
+    const sources = readyItems.value.map((i) => ({ ...i }))
+    const invalid = t.validateMulti?.(sources)
+    if (invalid) {
+      groupError.value = invalid
+      return
+    }
+    items.value.unshift({
+      uid: ++uid,
+      toolId: t.id,
+      isJob: true,
+      sources,
+      settings: s,
+      path: sources[0].path,
+      name: `合并 ${sources.length} 个视频`,
+      metaText: `${sources.length} 个片段 · 共 ${fmtDuration(sources.reduce((x, i) => x + i.duration, 0))} · ${t.canCopy(sources) ? '无损拼接' : '统一重编码'}`,
+      size: sources.reduce((x, i) => x + i.size, 0),
+      inSize: sources.reduce((x, i) => x + i.size, 0),
+      duration: sources.reduce((x, i) => x + i.duration, 0),
+      width: sources[0].width,
+      height: sources[0].height,
+      status: 'queued',
+      message: '', percent: 0, speed: '', eta: -1, outSize: 0, output: '', seconds: 0, child: null,
+    })
+    runQueue()
+    return
+  }
+
   for (const item of readyItems.value) {
     const invalid = t.validate?.(item, s)
     if (invalid) {
@@ -96,36 +144,56 @@ async function runOne(item) {
   const s = item.settings
   item.status = 'running'
   item.percent = 0
+  let out = ''
   try {
-    const { suffix, ext } = t.output(item, s)
-    const out = await outputPath(item.path, suffix, ext)
-    const args = t.buildArgs(item, s, out)
-    const totalUs = t.totalUs(item, s)
-    const { child, done } = await runFFmpeg(args, totalUs, (p) => {
-      item.percent = p.percent
-      item.speed = p.speed
-      item.eta = p.eta
-      item.outSize = p.outSize
-    })
-    item.child = child
-    const result = await done
-    item.child = null
-    if (item.status === 'cancelled') return
-    if (result.ok) {
-      item.status = 'done'
-      item.percent = 100
-      item.output = result.output
-      item.outSize = result.outSize
-      item.seconds = result.seconds
+    let steps
+    let totalUs
+    if (item.isJob) {
+      const o = t.outputMulti(item.sources)
+      out = await outputPath(item.path, o.suffix, o.ext)
+      steps = [await t.buildArgsMulti(item.sources, out)]
+      totalUs = t.totalUsMulti(item.sources)
     } else {
-      item.status = 'error'
-      item.message = result.message
+      const o = t.output(item, s)
+      out = await outputPath(item.path, o.suffix, o.ext)
+      steps = t.buildSteps ? t.buildSteps(item, s, out) : [t.buildArgs(item, s, out)]
+      totalUs = t.totalUs(item, s)
+    }
+
+    const n = steps.length
+    for (let i = 0; i < n; i++) {
+      const { child, done } = await runFFmpeg(steps[i], totalUs / n, (p) => {
+        item.percent = p.percent < 0 ? -1 : (i * 100 + p.percent) / n
+        item.speed = p.speed
+        item.eta = p.eta
+        item.outSize = p.outSize
+      })
+      item.child = child
+      const result = await done
+      item.child = null
+      if (item.status === 'cancelled') return
+      if (!result.ok) {
+        item.status = 'error'
+        item.message = result.message
+        return
+      }
+      if (i === n - 1) {
+        item.status = 'done'
+        item.percent = 100
+        item.output = result.output
+        item.outSize = result.outSize
+        item.seconds = result.seconds
+      }
     }
   } catch (e) {
     item.child = null
     if (item.status !== 'cancelled') {
       item.status = 'error'
       item.message = String(e)
+    }
+  } finally {
+    if (t.cleanup && out) {
+      for (const f of t.cleanup(out)) removeFile(f)
     }
   }
 }
@@ -136,13 +204,27 @@ function cancel(item) {
 }
 
 function retry(item) {
-  item.status = 'ready'
+  item.status = item.isJob ? 'queued' : 'ready'
   item.message = ''
   item.percent = 0
+  if (item.isJob) runQueue()
 }
 
 function remove(item) {
   items.value = items.value.filter((i) => i.uid !== item.uid)
+}
+
+function moveItem(item, dir) {
+  const arr = items.value
+  const idxs = arr
+    .map((x, i) => ({ x, i }))
+    .filter(({ x }) => x.toolId === item.toolId && x.status === 'ready' && !x.isJob)
+    .map(({ i }) => i)
+  const pos = idxs.findIndex((i) => arr[i].uid === item.uid)
+  const target = idxs[pos + dir]
+  if (target === undefined) return
+  const cur = idxs[pos]
+  ;[arr[cur], arr[target]] = [arr[target], arr[cur]]
 }
 
 function clearFinished() {
@@ -216,17 +298,20 @@ function baseName(path) {
       </div>
 
       <nav class="nav">
-        <button
-          v-for="t in TOOLS"
-          :key="t.id"
-          class="nav-item"
-          :class="{ active: t.id === currentId }"
-          @click="currentId = t.id"
-        >
-          <span class="nav-icon" v-html="ICONS[t.icon]"></span>
-          <span class="nav-label">{{ t.name }}</span>
-          <span v-if="activeBadge(t.id)" class="nav-badge">{{ activeBadge(t.id) }}</span>
-        </button>
+        <template v-for="g in TOOL_GROUPS" :key="g.name">
+          <div class="nav-group">{{ g.name }}</div>
+          <button
+            v-for="t in g.tools"
+            :key="t.id"
+            class="nav-item"
+            :class="{ active: t.id === currentId }"
+            @click="currentId = t.id; groupError = ''"
+          >
+            <span class="nav-icon" v-html="ICONS[t.icon]"></span>
+            <span class="nav-label">{{ t.name }}</span>
+            <span v-if="activeBadge(t.id)" class="nav-badge">{{ activeBadge(t.id) }}</span>
+          </button>
+        </template>
       </nav>
 
       <div class="sidebar-foot">
@@ -245,10 +330,11 @@ function baseName(path) {
       <div v-if="ffmpeg && !ffmpeg.found" class="alert">
         内置 FFmpeg 启动失败，请重新安装应用。{{ ffmpeg.error }}
       </div>
+      <div v-if="groupError" class="alert">{{ groupError }}</div>
 
       <!-- 参数面板 -->
-      <section class="panel">
-        <div v-for="f in tool.fields" :key="f.key" class="field">
+      <section class="panel" v-if="visibleFields.length">
+        <div v-for="f in visibleFields" :key="f.key" class="field">
           <div class="field-label">
             {{ typeof f.label === 'function' ? f.label(settings) : f.label }}
           </div>
@@ -284,7 +370,14 @@ function baseName(path) {
             spellcheck="false"
           />
 
-          <div class="field-hint">{{ f.hint ? f.hint(settings) : ' ' }}</div>
+          <div v-else-if="f.type === 'file'" class="file-field">
+            <button class="btn ghost small" :disabled="runningCount > 0" @click="pickAssetFile(f)">选择文件</button>
+            <span class="file-name" :class="{ empty: !settings[f.key] }" :title="settings[f.key]">
+              {{ settings[f.key] ? baseName(settings[f.key]) : '未选择' }}
+            </span>
+          </div>
+
+          <div class="field-hint">{{ f.hint ? f.hint(settings) : '' }}</div>
         </div>
       </section>
 
@@ -293,7 +386,7 @@ function baseName(path) {
         <div class="dropzone-art">
           <span class="dropzone-icon" v-html="ICONS[tool.icon]"></span>
         </div>
-        <div class="dropzone-title">拖入视频文件，或点击选择</div>
+        <div class="dropzone-title">{{ tool.multiInput ? '拖入多个视频，按顺序拼接' : '拖入视频文件，或点击选择' }}</div>
         <div class="dropzone-hint">支持 MP4 / MOV / MKV / AVI / FLV / WebM 等格式 · 输出不覆盖原文件</div>
       </section>
 
@@ -301,7 +394,7 @@ function baseName(path) {
       <section v-else class="queue">
         <div class="queue-head">
           <div class="queue-title">
-            任务
+            {{ tool.multiInput ? '素材与任务' : '任务' }}
             <span class="count">{{ toolItems.length }}</span>
             <span v-if="tool.compare && doneItems.length" class="saved-total">
               共节省 {{ fmtSize(doneItems.reduce((s, i) => s + Math.max(0, i.inSize - i.outSize), 0)) }}
@@ -312,8 +405,8 @@ function baseName(path) {
             <button class="btn ghost" @click="pickFiles">
               <span class="btn-icon" v-html="ICONS.plus"></span>添加
             </button>
-            <button class="btn primary" :disabled="readyItems.length === 0 || !ffmpeg?.found" @click="startAll">
-              {{ tool.action }}{{ readyItems.length > 1 ? ` (${readyItems.length})` : '' }}
+            <button class="btn primary" :disabled="startDisabled" @click="startAll">
+              {{ tool.action }}{{ !tool.multiInput && readyItems.length > 1 ? ` (${readyItems.length})` : '' }}
             </button>
           </div>
         </div>
@@ -322,8 +415,11 @@ function baseName(path) {
           <div class="item" v-for="item in toolItems" :key="item.uid">
             <div class="item-main">
               <div class="item-name" :title="item.path">{{ item.name }}</div>
-              <div class="item-meta" v-if="!item.error || item.width">
-                {{ item.width }}×{{ item.height }} · {{ item.codec }} · {{ fmtDuration(item.duration) }} · {{ fmtSize(item.size) }}
+              <div class="item-meta">
+                <template v-if="item.metaText">{{ item.metaText }}</template>
+                <template v-else-if="item.width">
+                  {{ item.width }}×{{ item.height }} · {{ item.codec }} · {{ fmtDuration(item.duration) }} · {{ fmtSize(item.size) }}
+                </template>
               </div>
 
               <!-- 进行中 -->
@@ -367,9 +463,13 @@ function baseName(path) {
             </div>
 
             <div class="item-actions">
+              <template v-if="tool.multiInput && item.status === 'ready'">
+                <button class="btn ghost small" title="上移" @click="moveItem(item, -1)">↑</button>
+                <button class="btn ghost small" title="下移" @click="moveItem(item, 1)">↓</button>
+              </template>
               <button v-if="['queued', 'running'].includes(item.status)" class="btn ghost small" @click="cancel(item)">取消</button>
               <button v-if="item.status === 'done'" class="btn ghost small" @click="revealFile(item.output)">显示文件</button>
-              <button v-if="['error', 'cancelled'].includes(item.status) && item.width" class="btn ghost small" @click="retry(item)">重试</button>
+              <button v-if="['error', 'cancelled'].includes(item.status) && (item.width || item.isJob)" class="btn ghost small" @click="retry(item)">重试</button>
               <button v-if="!['queued', 'running'].includes(item.status)" class="btn ghost small quiet" @click="remove(item)">移除</button>
             </div>
           </div>
@@ -406,7 +506,7 @@ function baseName(path) {
   display: flex;
   align-items: center;
   gap: 11px;
-  padding: 0 10px 20px;
+  padding: 0 10px 16px;
 }
 .brand-logo {
   width: 38px;
@@ -434,19 +534,32 @@ function baseName(path) {
 .nav {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 2px;
   flex: 1;
+  overflow-y: auto;
+  margin: 0 -4px;
+  padding: 0 4px;
+}
+.nav-group {
+  font-size: 11px;
+  color: var(--text-3);
+  letter-spacing: 0.08em;
+  padding: 12px 12px 5px;
+}
+.nav-group:first-child {
+  padding-top: 2px;
 }
 .nav-item {
   display: flex;
   align-items: center;
-  gap: 11px;
-  padding: 9px 12px;
+  gap: 10px;
+  padding: 7.5px 12px;
   border-radius: var(--radius);
   font-size: 13.5px;
   color: var(--text-2);
   transition: background 0.18s, color 0.18s, transform 0.12s;
   text-align: left;
+  flex-shrink: 0;
 }
 .nav-item:hover {
   background: var(--fill-1);
@@ -461,8 +574,8 @@ function baseName(path) {
   font-weight: 600;
 }
 .nav-icon {
-  width: 19px;
-  height: 19px;
+  width: 18px;
+  height: 18px;
   flex-shrink: 0;
 }
 .nav-icon :deep(svg) {
@@ -538,7 +651,7 @@ function baseName(path) {
   box-shadow: var(--shadow-card);
   padding: 18px 22px 13px;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 18px 26px;
   flex-shrink: 0;
 }
@@ -612,6 +725,23 @@ function baseName(path) {
 }
 .time-input:disabled {
   background: var(--fill-1);
+  color: var(--text-3);
+}
+
+.file-field {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+.file-name {
+  font-size: 12.5px;
+  color: var(--text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-name.empty {
   color: var(--text-3);
 }
 
@@ -740,9 +870,13 @@ function baseName(path) {
   background: #fff;
   border: 1px solid var(--border);
 }
-.btn.ghost:hover {
+.btn.ghost:hover:not(:disabled) {
   color: var(--primary);
   border-color: rgba(22, 100, 255, 0.4);
+}
+.btn.ghost:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .btn.small {
   padding: 4px 11px;
@@ -753,7 +887,7 @@ function baseName(path) {
   background: transparent;
   color: var(--text-3);
 }
-.btn.quiet:hover {
+.btn.quiet:hover:not(:disabled) {
   color: var(--danger);
   border-color: transparent;
   background: var(--danger-light);
@@ -774,6 +908,7 @@ function baseName(path) {
   display: flex;
   flex-direction: column;
   gap: 9px;
+  position: relative;
 }
 .item {
   display: flex;

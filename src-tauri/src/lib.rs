@@ -23,6 +23,26 @@ fn file_size(path: String) -> u64 {
     std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
 }
 
+/// 写 concat demuxer 列表文件到系统临时目录，返回文件路径
+#[tauri::command]
+fn write_concat_list(paths: Vec<String>) -> Result<String, String> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let mut content = String::new();
+    for p in &paths {
+        // concat 列表的单引号转义: ' -> '\''
+        let esc = p.replace('\'', "'\\''");
+        content.push_str(&format!("file '{esc}'\n"));
+    }
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let file = std::env::temp_dir().join(format!(
+        "lightvideo-concat-{}-{n}.txt",
+        std::process::id()
+    ));
+    std::fs::write(&file, content).map_err(|e| e.to_string())?;
+    Ok(file.to_string_lossy().to_string())
+}
+
 /// 删除失败/取消任务留下的半成品输出文件
 #[tauri::command]
 fn remove_file(path: String) {
@@ -59,6 +79,7 @@ pub fn run() {
             output_path,
             file_size,
             remove_file,
+            write_concat_list,
             reveal
         ])
         .setup(|app| {

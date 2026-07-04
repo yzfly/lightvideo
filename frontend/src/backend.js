@@ -34,6 +34,20 @@ export async function pickVideos() {
   return Array.isArray(paths) ? paths : [paths]
 }
 
+// 单文件选择 (音频/字幕/图片等辅助素材)
+export async function pickFile(title, name, extensions) {
+  const path = await open({ multiple: false, title, filters: [{ name, extensions }] })
+  return typeof path === 'string' ? path : null
+}
+
+export function writeConcatList(paths) {
+  return invoke('write_concat_list', { paths })
+}
+
+export function removeFile(path) {
+  return invoke('remove_file', { path })
+}
+
 // ffprobe 探测视频元信息
 export async function probe(path) {
   const name = path.split(/[/\\]/).pop()
