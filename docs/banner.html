@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"/>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    width: 1600px; height: 420px; overflow: hidden;
+    font-family: -apple-system, 'PingFang SC', sans-serif;
+    background:
+      radial-gradient(ellipse 900px 500px at 85% -10%, rgba(22,100,255,0.14), transparent 60%),
+      radial-gradient(ellipse 700px 400px at 8% 110%, rgba(0,200,255,0.10), transparent 60%),
+      linear-gradient(180deg, #f8faff 0%, #eef4ff 100%);
+    display: flex; align-items: center; justify-content: center;
+    position: relative;
+  }
+  .wrap { display: flex; align-items: center; gap: 56px; }
+  .logo { width: 168px; height: 168px; filter: drop-shadow(0 18px 40px rgba(22,100,255,0.35)); }
+  .name { font-size: 76px; font-weight: 800; color: #17233d; letter-spacing: 0.02em; line-height: 1.15; }
+  .name .en { font-weight: 600; font-size: 42px; color: #7a87a3; margin-left: 18px; letter-spacing: 0.01em; }
+  .slogan { font-size: 30px; color: #4b5566; margin-top: 14px; font-weight: 500; }
+  .slogan b { color: #1664ff; font-weight: 700; }
+  .chips { display: flex; gap: 12px; margin-top: 26px; flex-wrap: wrap; max-width: 860px; }
+  .chip {
+    font-size: 19px; color: #2d3a53; background: rgba(255,255,255,0.9);
+    border: 1px solid rgba(22,100,255,0.16); border-radius: 999px;
+    padding: 8px 20px; box-shadow: 0 2px 10px rgba(22,100,255,0.07);
+  }
+  .chip.hot { color: #1664ff; border-color: rgba(22,100,255,0.45); font-weight: 600; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <svg class="logo" viewBox="0 0 40 40" fill="none">
+      <rect width="40" height="40" rx="10.5" fill="url(#g)"/>
+      <path d="M15.2 12.1c0-1.24 1.36-2 2.42-1.35l11.2 6.9a1.58 1.58 0 0 1 0 2.7l-11.2 6.9c-1.06.65-2.42-.11-2.42-1.35V12.1z" fill="#fff"/>
+      <path d="M9 14.5h4.4M9 20h3.2M9 25.5h4.4" stroke="#fff" stroke-opacity=".85" stroke-width="2.2" stroke-linecap="round"/>
+      <defs><linearGradient id="g" x1="4" y1="3" x2="36" y2="38" gradientUnits="userSpaceOnUse">
+        <stop stop-color="#3D7FFF"/><stop offset="1" stop-color="#0E4FD1"/>
+      </linearGradient></defs>
+    </svg>
+    <div>
+      <div class="name">轻影<span class="en">LightVideo</span></div>
+      <div class="slogan">FFmpeg 视频工具箱 · <b>拖进来就能用</b> · 内置引擎零依赖</div>
+      <div class="chips">
+        <span class="chip hot">视频压缩</span>
+        <span class="chip">压到指定大小</span>
+        <span class="chip">格式转换</span>
+        <span class="chip">合并 · 剪辑 · 变速</span>
+        <span class="chip">横竖屏适配</span>
+        <span class="chip">加水印</span>
+        <span class="chip hot">AI 自动字幕</span>
+        <span class="chip hot">录音转文字</span>
+        <span class="chip">转 GIF</span>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

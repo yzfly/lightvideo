@@ -310,7 +310,45 @@ function clearFinished() {
   )
 }
 
+// 演示模式: ?demo=<toolId> 注入演示数据, 供文档截图使用, 不依赖 Tauri 后端
+const DEMO = new URLSearchParams(location.search).get('demo')
+
+function seedDemo(toolId) {
+  ffmpeg.value = { found: true }
+  currentId.value = toolId
+  const GB = 1 << 30
+  const MB = 1 << 20
+  const base = {
+    toolId, message: '', speed: '', eta: -1, output: '', outSize: 0,
+    percent: 0, seconds: 0, child: null, isJob: false, stageText: '', status: 'ready',
+  }
+  const seeds = {
+    compress: [
+      { ...base, uid: 1, name: '产品发布会实录.mp4', path: '/demo/1', width: 3840, height: 2160, codec: 'hevc', duration: 1732, size: 2.4 * GB, inSize: 2.4 * GB, outSize: 412 * MB, status: 'done', output: '/demo/产品发布会实录_slim.mp4' },
+      { ...base, uid: 2, name: '团队周会录屏.mov', path: '/demo/2', width: 2560, height: 1440, codec: 'prores', duration: 3320, size: 8.1 * GB, inSize: 8.1 * GB, outSize: 920 * MB, status: 'running', percent: 67.4, speed: '3.1x', eta: 262 },
+      { ...base, uid: 3, name: 'Vlog-上海城市漫步.mp4', path: '/demo/3', width: 1920, height: 1080, codec: 'h264', duration: 753, size: 1.4 * GB, inSize: 1.4 * GB },
+    ],
+    transcribe: [
+      { ...base, uid: 1, name: '客户访谈录音.m4a', path: '/demo/1', width: 0, height: 0, codec: '', audioCodec: 'aac', duration: 2832, size: 43.2 * MB, inSize: 43.2 * MB, status: 'running', percent: 72, stageText: 'AI 识别中' },
+      { ...base, uid: 2, name: '晨会语音备忘.mp3', path: '/demo/2', width: 0, height: 0, codec: '', audioCodec: 'mp3', duration: 525, size: 8.2 * MB, inSize: 8.2 * MB, status: 'done', output: '/demo/晨会语音备忘.txt', outSize: 6 * 1024 },
+    ],
+    asr: [
+      { ...base, uid: 1, name: '产品教程-第3期.mp4', path: '/demo/1', width: 1920, height: 1080, codec: 'h264', duration: 1126, size: 860 * MB, inSize: 860 * MB, status: 'running', percent: 81, stageText: '烧录字幕' },
+      { ...base, uid: 2, name: '英文播客访谈.mp4', path: '/demo/2', width: 1280, height: 720, codec: 'h264', duration: 3915, size: 1.2 * GB, inSize: 1.2 * GB, status: 'done', output: '/demo/英文播客访谈.srt', outSize: 58 * 1024 },
+    ],
+    vertical: [
+      { ...base, uid: 1, name: '旅行混剪-冰岛.mp4', path: '/demo/1', width: 3840, height: 2160, codec: 'h264', duration: 187, size: 1.1 * GB, inSize: 1.1 * GB },
+      { ...base, uid: 2, name: '新品开箱.mp4', path: '/demo/2', width: 1920, height: 1080, codec: 'h264', duration: 424, size: 620 * MB, inSize: 620 * MB, status: 'done', output: '/demo/新品开箱_fit.mp4', outSize: 512 * MB },
+    ],
+  }
+  items.value = (seeds[toolId] || []).map((x) => ({ audioCodec: 'aac', ...x }))
+}
+
 onMounted(async () => {
+  if (DEMO) {
+    seedDemo(DEMO)
+    return
+  }
   ffmpeg.value = await checkFFmpeg()
   unlistenDrop = await getCurrentWebview().onDragDropEvent((event) => {
     const type = event.payload.type

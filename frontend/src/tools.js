@@ -773,51 +773,6 @@ export const TOOLS = [
     },
   },
 
-  {
-    id: 'transcribe',
-    group: '字幕',
-    name: '录音转文字',
-    desc: '会议录音、语音备忘、播客，本地 AI 转成文字稿，不联网不上传',
-    icon: 'transcribe',
-    action: '开始转写',
-    accept: 'media', // 音频为主, 视频也收
-    check: (info) => (!info.audioCodec ? '文件里没有声音' : ''),
-    defaults: { lang: 'auto', format: 'txt' },
-    fields: [
-      {
-        key: 'lang', type: 'segmented', label: '语言',
-        options: [
-          { value: 'auto', label: '自动' },
-          { value: 'zh', label: '中文' },
-          { value: 'en', label: 'English' },
-          { value: 'yue', label: '粤语' },
-        ],
-        hint: () => '首次使用需下载语音模型（约 230MB），之后完全离线',
-      },
-      {
-        key: 'format', type: 'segmented', label: '输出格式',
-        options: [
-          { value: 'txt', label: '纯文本' },
-          { value: 'srt', label: '带时间戳 SRT' },
-        ],
-        hint: (s) => (s.format === 'txt' ? '按语句分行的文字稿' : '每句话带起止时间，可当字幕用'),
-      },
-    ],
-    async run(item, s, ctx) {
-      const dir = await ensureAsrModels(ctx, 0, 30)
-      if (dir === null) return null
-      const wav = await extractWav(item, ctx, 30, 35)
-      if (wav === null) return null
-      const segs = await recognizeWav(dir, wav, s.lang, item, ctx, 35, 98)
-      if (segs === null) return null
-
-      const out = await ctx.outPath('', s.format)
-      const content = s.format === 'srt' ? toSrt(segs) : segs.map((g) => g.text).join('\n') + '\n'
-      await writeTextFile(out, content)
-      return { output: out, outSize: await fileSize(out) }
-    },
-  },
-
   // ================= 音频 =================
   {
     id: 'audio',
@@ -946,6 +901,51 @@ export const TOOLS = [
         '-filter_complex', `[1:a]volume=${vol}${fade}[a]`,
         '-map', '0:v', '-map', '[a]', '-c:v', 'copy', ...aenc, '-shortest', out,
       ]
+    },
+  },
+
+  {
+    id: 'transcribe',
+    group: '音频',
+    name: '录音转文字',
+    desc: '会议录音、语音备忘、播客，本地 AI 转成文字稿，不联网不上传',
+    icon: 'transcribe',
+    action: '开始转写',
+    accept: 'media', // 音频为主, 视频也收
+    check: (info) => (!info.audioCodec ? '文件里没有声音' : ''),
+    defaults: { lang: 'auto', format: 'txt' },
+    fields: [
+      {
+        key: 'lang', type: 'segmented', label: '语言',
+        options: [
+          { value: 'auto', label: '自动' },
+          { value: 'zh', label: '中文' },
+          { value: 'en', label: 'English' },
+          { value: 'yue', label: '粤语' },
+        ],
+        hint: () => '首次使用需下载语音模型（约 230MB），之后完全离线',
+      },
+      {
+        key: 'format', type: 'segmented', label: '输出格式',
+        options: [
+          { value: 'txt', label: '纯文本' },
+          { value: 'srt', label: '带时间戳 SRT' },
+        ],
+        hint: (s) => (s.format === 'txt' ? '按语句分行的文字稿' : '每句话带起止时间，可当字幕用'),
+      },
+    ],
+    async run(item, s, ctx) {
+      const dir = await ensureAsrModels(ctx, 0, 30)
+      if (dir === null) return null
+      const wav = await extractWav(item, ctx, 30, 35)
+      if (wav === null) return null
+      const segs = await recognizeWav(dir, wav, s.lang, item, ctx, 35, 98)
+      if (segs === null) return null
+
+      const out = await ctx.outPath('', s.format)
+      const content = s.format === 'srt' ? toSrt(segs) : segs.map((g) => g.text).join('\n') + '\n'
+      await writeTextFile(out, content)
+      return { output: out, outSize: await fileSize(out) }
     },
   },
 
