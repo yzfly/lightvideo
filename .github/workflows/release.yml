@@ -49,9 +49,11 @@ jobs:
         with:
           workspaces: src-tauri
 
-      - name: 下载静态 FFmpeg
+      - name: 下载静态 FFmpeg 与语音识别运行时
         shell: bash
-        run: ./scripts/download_ffmpeg.sh ${{ matrix.target }}
+        run: |
+          ./scripts/download_ffmpeg.sh ${{ matrix.target }}
+          ./scripts/download_asr_runtime.sh ${{ matrix.target }}
 
       - name: 安装依赖
         run: |

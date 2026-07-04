@@ -52,6 +52,78 @@ export function tempPath(name) {
   return invoke('temp_path', { name })
 }
 
+export function fileSize(path) {
+  return invoke('file_size', { path })
+}
+
+export function asrDir() {
+  return invoke('asr_dir')
+}
+
+export function writeTextFile(path, content) {
+  return invoke('write_text_file', { path, content })
+}
+
+/**
+ * 运行本地语音识别 sidecar，流式回调识别出的分段
+ * 输出行格式: "0.742 -- 5.568: 文本"
+ */
+export async function runAsr(args, onSegment) {
+  const cmd = Command.sidecar('binaries/sherpa-asr', args)
+  const segs = []
+  let errTail = ''
+  cmd.stdout.on('data', (line) => {
+    const m = line.match(/^(\d+(?:\.\d+)?)\s*--\s*(\d+(?:\.\d+)?):\s*(.*)$/)
+    if (m) {
+      const seg = { start: +m[1], end: +m[2], text: m[3].trim() }
+      if (seg.text) {
+        segs.push(seg)
+        onSegment?.(seg)
+      }
+    }
+  })
+  cmd.stderr.on('data', (line) => {
+    errTail = (errTail + '\n' + line).slice(-400)
+  })
+  const done = new Promise((resolve) => {
+    cmd.on('close', ({ code }) => resolve({ ok: code === 0, segs, message: errTail.trim() }))
+    cmd.on('error', (e) => resolve({ ok: false, segs, message: String(e) }))
+  })
+  const child = await cmd.spawn()
+  return { child, done }
+}
+
+/**
+ * 用系统 curl 下载文件, 按已落盘字节数汇报进度; 支持断点续传。
+ * 依次尝试 urls, 全部失败返回 false。
+ */
+export async function downloadFile(urls, dest, expectedSize, onPct, setChild) {
+  for (const url of urls) {
+    const existing = await fileSize(dest)
+    if (existing === expectedSize) return true
+    const cmd = Command.create('curl', ['-fSL', '--retry', '2', '-C', '-', '--connect-timeout', '15', '-o', dest, url])
+    const done = new Promise((resolve) => {
+      cmd.on('close', ({ code }) => resolve(code))
+      cmd.on('error', () => resolve(-1))
+    })
+    const child = await cmd.spawn()
+    setChild?.(child)
+    const poll = setInterval(async () => {
+      const sz = await fileSize(dest)
+      onPct?.(Math.min(99, (sz / expectedSize) * 100))
+    }, 800)
+    const code = await done
+    clearInterval(poll)
+    setChild?.(null)
+    if ((await fileSize(dest)) === expectedSize) {
+      onPct?.(100)
+      return true
+    }
+    if (code === null) return false // 被取消
+  }
+  return false
+}
+
 export function copyToTemp(src, ext) {
   return invoke('copy_to_temp', { src, ext })
 }

@@ -1,6 +1,9 @@
 // 工具模块注册表: 每个工具声明自己的参数、输出命名与 ffmpeg 参数构建
 // 界面按 fields 声明自动渲染，新增工具只需在此登记
-import { writeConcatList, copyToTemp } from './backend.js'
+import {
+  writeConcatList, copyToTemp, runFFmpeg, runAsr, downloadFile,
+  asrDir, fileSize, tempPath, writeTextFile, removeFile,
+} from './backend.js'
 
 // "HH:MM:SS.x" / "MM:SS" / "SS" -> 秒
 export function parseTime(str) {
@@ -43,6 +46,57 @@ const SUB_FONT = /Mac/.test(navigator.platform)
   : /Win/.test(navigator.platform)
     ? 'Microsoft YaHei'
     : 'Noto Sans CJK SC'
+
+// 构造字幕烧录滤镜 (烧录字幕与自动字幕共用)
+// 字幕先复制到安全 ASCII 路径, 绕开滤镜参数的路径转义地狱
+async function subtitleVf(subPath, fontsize) {
+  const ext = extOf(subPath)
+  const safe = await copyToTemp(subPath, ext)
+  const p = safe.replace(/\\/g, '/').replace(/:/g, '\\:')
+  if (ext === 'ass' || ext === 'ssa') return `ass=filename=${p}`
+  return `subtitles=filename=${p}:force_style='FontName=${SUB_FONT},FontSize=${fontsize},Outline=1,Shadow=0'`
+}
+
+// ---------- 本地语音识别 (sherpa-onnx + SenseVoice) ----------
+const ASR_FILES = [
+  {
+    name: 'silero_vad.onnx',
+    size: 643854,
+    urls: [
+      'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx',
+      'https://gh-proxy.com/https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx',
+    ],
+  },
+  {
+    name: 'model.int8.onnx',
+    size: 239233841,
+    urls: [
+      'https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/model.int8.onnx',
+      'https://hf-mirror.com/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/model.int8.onnx',
+    ],
+  },
+  {
+    name: 'tokens.txt',
+    size: 315894,
+    urls: [
+      'https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/tokens.txt',
+      'https://hf-mirror.com/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/tokens.txt',
+    ],
+  },
+]
+
+function srtTs(sec) {
+  const ms = Math.round(sec * 1000)
+  const h = String(Math.floor(ms / 3600000)).padStart(2, '0')
+  const m = String(Math.floor((ms % 3600000) / 60000)).padStart(2, '0')
+  const s = String(Math.floor((ms % 60000) / 1000)).padStart(2, '0')
+  const f = String(ms % 1000).padStart(3, '0')
+  return `${h}:${m}:${s},${f}`
+}
+
+function toSrt(segs) {
+  return segs.map((g, i) => `${i + 1}\n${srtTs(g.start)} --> ${srtTs(g.end)}\n${g.text}\n`).join('\n')
+}
 
 export const TOOLS = [
   // ================= 视频处理 =================
@@ -578,22 +632,130 @@ export const TOOLS = [
     validate(item, s) {
       if (!s.sub) return '请先选择字幕文件'
     },
-    async _vf(s) {
-      const ext = extOf(s.sub)
-      // 复制到安全 ASCII 路径, 绕开滤镜参数的路径转义地狱
-      const safe = await copyToTemp(s.sub, ext)
-      const p = safe.replace(/\\/g, '/').replace(/:/g, '\\:')
-      if (ext === 'ass' || ext === 'ssa') return `ass=filename=${p}`
-      return `subtitles=filename=${p}:force_style='FontName=${SUB_FONT},FontSize=${s.fontsize},Outline=1,Shadow=0'`
-    },
     async buildArgs(item, s, out) {
-      const vf = await this._vf(s)
+      const vf = await subtitleVf(s.sub, s.fontsize)
       return ['-y', '-i', item.path, '-vf', vf, '-c:v', 'libx264', '-preset', 'medium', '-crf', '20', ...audioArgs(item, 'mp4'), '-movflags', '+faststart', out]
     },
     async previewArgs(item, s, png) {
-      const vf = await this._vf(s)
+      const vf = await subtitleVf(s.sub, s.fontsize)
       // 字幕依赖时间轴, 用输出侧 seek 保证预览帧对应正确的字幕条
       return ['-y', '-i', item.path, '-vf', vf, '-ss', String(Math.min(2, item.duration / 2)), '-frames:v', '1', png]
+    },
+  },
+
+  {
+    id: 'asr',
+    group: '字幕',
+    name: '自动字幕',
+    desc: '本地 AI 识别人声生成字幕，不联网不上传，支持中英粤日韩',
+    icon: 'asr',
+    action: '开始识别',
+    defaults: { lang: 'auto', mode: 'srt' },
+    fields: [
+      {
+        key: 'lang', type: 'segmented', label: '语言',
+        options: [
+          { value: 'auto', label: '自动' },
+          { value: 'zh', label: '中文' },
+          { value: 'en', label: 'English' },
+          { value: 'yue', label: '粤语' },
+        ],
+        hint: () => '首次使用需下载语音模型（约 230MB），之后完全离线',
+      },
+      {
+        key: 'mode', type: 'segmented', label: '输出',
+        options: [
+          { value: 'srt', label: '生成 SRT 文件' },
+          { value: 'burn', label: '识别并烧录' },
+        ],
+        hint: (s) => (s.mode === 'srt' ? '字幕文件存在视频旁边，可先校对再烧录' : '识别后直接把字幕压进画面'),
+      },
+    ],
+    validate(item) {
+      if (!item.audioCodec) return '该视频没有音轨'
+    },
+    async run(item, s, ctx) {
+      // 1. 模型就位 (按需下载, 支持断点续传与镜像回退)
+      const dir = await asrDir()
+      const sep = navigator.platform.includes('Win') ? '\\' : '/'
+      const totalBytes = ASR_FILES.reduce((t, f) => t + f.size, 0)
+      let doneBytes = 0
+      for (const f of ASR_FILES) {
+        const dest = dir + sep + f.name
+        if ((await fileSize(dest)) !== f.size) {
+          ctx.setStage('首次使用：下载语音模型（共约 230MB，支持断点续传）')
+          const ok = await downloadFile(f.urls, dest, f.size, (pct) => {
+            ctx.onProgress(((doneBytes + (f.size * pct) / 100) / totalBytes) * 30)
+          }, ctx.setChild)
+          if (ctx.cancelled()) return null
+          if (!ok) throw new Error('模型下载失败，请检查网络后点击重试（已下载部分会续传）')
+        }
+        doneBytes += f.size
+      }
+
+      // 2. 提取 16k 单声道音频
+      ctx.setStage('提取音频')
+      const wav = await tempPath(`lightvideo-asr-${item.uid}.wav`)
+      {
+        const { child, done } = await runFFmpeg(
+          ['-y', '-i', item.path, '-vn', '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', wav],
+          item.duration * 1e6,
+          (p) => ctx.onProgress(30 + Math.max(0, p.percent) * 0.05)
+        )
+        ctx.setChild(child)
+        const r = await done
+        ctx.setChild(null)
+        if (ctx.cancelled()) return null
+        if (!r.ok) throw new Error(r.message)
+      }
+
+      // 3. 本地识别
+      ctx.setStage('AI 识别中')
+      const asrEnd = s.mode === 'burn' ? 60 : 95
+      const { child, done } = await runAsr(
+        [
+          `--silero-vad-model=${dir}${sep}silero_vad.onnx`,
+          `--sense-voice-model=${dir}${sep}model.int8.onnx`,
+          `--tokens=${dir}${sep}tokens.txt`,
+          '--sense-voice-use-itn=1',
+          '--silero-vad-max-speech-duration=8',
+          `--sense-voice-language=${s.lang}`,
+          '--num-threads=4',
+          wav,
+        ],
+        (seg) => ctx.onProgress(35 + Math.min(1, seg.end / item.duration) * (asrEnd - 35))
+      )
+      ctx.setChild(child)
+      const r = await done
+      ctx.setChild(null)
+      removeFile(wav)
+      if (ctx.cancelled()) return null
+      if (r.segs.length === 0) {
+        throw new Error(r.ok ? '没有识别到人声' : '识别失败：' + r.message)
+      }
+
+      // 4. 生成 SRT
+      const srtPath = await ctx.outPath('', 'srt')
+      await writeTextFile(srtPath, toSrt(r.segs))
+      if (s.mode === 'srt') {
+        return { output: srtPath, outSize: await fileSize(srtPath) }
+      }
+
+      // 5. 烧录进视频
+      ctx.setStage('烧录字幕')
+      const vf = await subtitleVf(srtPath, 24)
+      const out = await ctx.outPath('_sub', 'mp4')
+      const { child: c2, done: d2 } = await runFFmpeg(
+        ['-y', '-i', item.path, '-vf', vf, '-c:v', 'libx264', '-preset', 'medium', '-crf', '20', ...audioArgs(item, 'mp4'), '-movflags', '+faststart', out],
+        item.duration * 1e6,
+        (p) => ctx.onProgress(60 + Math.max(0, p.percent) * 0.4)
+      )
+      ctx.setChild(c2)
+      const r2 = await d2
+      ctx.setChild(null)
+      if (ctx.cancelled()) return null
+      if (!r2.ok) throw new Error(r2.message)
+      return { output: out, outSize: r2.outSize }
     },
   },
 

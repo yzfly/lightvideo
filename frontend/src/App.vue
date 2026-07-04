@@ -145,6 +145,36 @@ async function runOne(item) {
   const s = item.settings
   item.status = 'running'
   item.percent = 0
+  item.speed = ''
+  item.stageText = ''
+
+  // 自定义流程的工具 (如自动字幕: 下载模型->抽音频->识别->烧录)
+  if (t.run) {
+    try {
+      const r = await t.run(item, item.settings, {
+        setStage: (txt) => { item.stageText = txt },
+        onProgress: (pct) => { item.percent = pct },
+        setChild: (c) => { item.child = c },
+        cancelled: () => item.status === 'cancelled',
+        outPath: (suffix, ext) => outputPath(item.path, suffix, ext),
+      })
+      if (item.status === 'cancelled' || r === null) return
+      item.status = 'done'
+      item.percent = 100
+      item.output = r.output
+      item.outSize = r.outSize
+    } catch (e) {
+      if (item.status !== 'cancelled') {
+        item.status = 'error'
+        item.message = String(e.message || e)
+      }
+    } finally {
+      item.child = null
+      item.stageText = ''
+    }
+    return
+  }
+
   let out = ''
   try {
     let steps
@@ -463,9 +493,10 @@ function baseName(path) {
                   <div class="progress-fill" :style="item.percent >= 0 ? { width: item.percent + '%' } : {}"></div>
                 </div>
                 <span v-if="item.percent >= 0" class="progress-text">
-                  {{ item.percent.toFixed(0) }}% · {{ item.speed }} {{ fmtEta(item.eta) }}
+                  {{ item.stageText ? item.stageText + ' · ' : '' }}{{ item.percent.toFixed(0) }}%
+                  <template v-if="!item.stageText">· {{ item.speed }} {{ fmtEta(item.eta) }}</template>
                 </span>
-                <span v-else class="progress-text">处理中…</span>
+                <span v-else class="progress-text">{{ item.stageText || '处理中…' }}</span>
               </div>
 
               <!-- 完成 -->

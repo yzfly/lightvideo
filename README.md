@@ -12,18 +12,19 @@ ffmpeg -i input.mp4 -c:v libx264 -preset medium -crf 23 output.mp4
 
 它能在肉眼无损的画质下把视频压小 50%~90%。轻影从这条指令出发，把常用视频操作全部图形化。
 
-## 六大工具
+## 十六个工具
 
-| 工具 | 说明 |
-|------|------|
-| 🗜 **视频压缩** | CRF 恒定质量编码，肉眼无损大幅瘦身，可调画质/速度/分辨率 |
-| 🔄 **格式转换** | MP4 / MOV / MKV / WebM 互转，支持秒级换容器与重编码两种方式 |
-| 🎵 **提取音频** | 抽出视频音轨，存为 MP3 / M4A / WAV / FLAC |
-| ✂️ **视频剪辑** | 按起止时间截取片段，无损快剪秒级完成，精准模式帧级切割 |
-| 🎞 **视频转 GIF** | 调色板两阶段算法，颜色准确的高质量 GIF |
-| 📸 **视频截图** | 抽取任意时间点画面，保存 PNG / JPG |
+**视频**：视频压缩（CRF 肉眼无损）· 压缩到指定大小（两遍编码，应对微信等平台限制）· 格式转换（秒级换容器/重编码）· 视频合并（同参数无损拼接）· 视频剪辑（无损快剪/帧级精准）· 视频变速（0.5×–3×，音调自动修正）· 视频倒放
 
-通用能力：批量队列串行处理、实时进度（百分比/速度/剩余时间）、输出永不覆盖原文件、失败一键重试。
+**画面**：旋转翻转 · 画面裁剪（比例居中裁剪）· 横竖屏适配（16:9 ⇄ 9:16，模糊背景铺满）· 加水印（位置/大小/透明度）
+
+**音频**：提取音频（MP3/M4A/WAV/FLAC）· 音量调整/移除音轨 · 配背景音乐（混音/循环/淡出）
+
+**字幕**：烧录字幕（SRT/ASS，中文字体自动适配）· **自动字幕**——本地 AI 语音识别（FunASR 系 SenseVoice 模型 + sherpa-onnx 运行时），不联网不上传，支持中英粤日韩，可生成 SRT 或直接烧录
+
+**图像**：视频转 GIF（调色板两阶段）· 视频截图
+
+通用能力：批量队列串行处理、实时进度、单帧效果预览（水印/裁剪/字幕等）、输出永不覆盖原文件、失败一键重试。自动字幕的语音模型（约 230MB）首次使用时下载，之后完全离线。
 
 ## 下载使用
 
@@ -38,8 +39,9 @@ ffmpeg -i input.mp4 -c:v libx264 -preset medium -crf 23 output.mp4
 npm install
 npm install --prefix frontend
 
-# 2. 下载静态 FFmpeg (打进应用的 sidecar 二进制)
+# 2. 下载静态 FFmpeg 与语音识别运行时 (打进应用的 sidecar 二进制)
 ./scripts/download_ffmpeg.sh
+./scripts/download_asr_runtime.sh
 
 # 3. 开发调试（热重载）
 npm run dev
@@ -61,6 +63,7 @@ git tag v1.0.0 && git push origin v1.0.0
 - **外壳**：[Tauri v2](https://v2.tauri.app/) —— 原生 WebView，安装包小
 - **界面**：Vue 3 + Vite —— 亮色系设计，拖拽交互
 - **编码内核**：FFmpeg 以 [sidecar](https://v2.tauri.app/develop/sidecar/) 形式内置静态构建
+- **语音识别**：[sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) 静态 CLI + [SenseVoice](https://github.com/FunAudioLLM/SenseVoice) int8 模型 + Silero VAD，纯本地推理
 - **工具注册表**：`frontend/src/tools.js` 声明式定义每个工具的参数、校验与 ffmpeg 命令构建，新增工具只需登记一项
 
 ```

@@ -70,6 +70,25 @@ fn copy_to_temp(src: String, ext: String) -> Result<String, String> {
     Ok(dest.to_string_lossy().to_string())
 }
 
+/// 语音模型存放目录 (应用数据目录下, 卸载应用不影响重下)
+#[tauri::command]
+fn asr_dir(app: tauri::AppHandle) -> Result<String, String> {
+    use tauri::Manager;
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("asr-models");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.to_string_lossy().to_string())
+}
+
+/// 写文本文件 (SRT 字幕等)
+#[tauri::command]
+fn write_text_file(path: String, content: String) -> Result<(), String> {
+    std::fs::write(&path, content).map_err(|e| e.to_string())
+}
+
 /// 在文件管理器中显示文件
 #[tauri::command]
 fn reveal(path: String) {
@@ -103,6 +122,8 @@ pub fn run() {
             write_concat_list,
             temp_path,
             copy_to_temp,
+            asr_dir,
+            write_text_file,
             reveal
         ])
         .setup(|app| {
