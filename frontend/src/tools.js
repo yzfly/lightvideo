@@ -1,6 +1,6 @@
 // 工具模块注册表: 每个工具声明自己的参数、输出命名与 ffmpeg 参数构建
 // 界面按 fields 声明自动渲染，新增工具只需在此登记
-import { writeConcatList } from './backend.js'
+import { writeConcatList, copyToTemp } from './backend.js'
 
 // "HH:MM:SS.x" / "MM:SS" / "SS" -> 秒
 export function parseTime(str) {
@@ -33,6 +33,16 @@ function audioArgs(item, ext, force = false) {
 
 const GIF_FILTER = (fps, width) =>
   `fps=${fps},scale=${width}:-1:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle`
+
+// 预览抽帧的时间点: 避开片头黑场, 也别超出片长
+const previewTs = (item) => Math.min(1, item.duration / 2).toFixed(2)
+
+// 中文字幕需要显式指定字体, 否则 fontconfig 可能找不到 CJK 字体渲染成方块
+const SUB_FONT = /Mac/.test(navigator.platform)
+  ? 'PingFang SC'
+  : /Win/.test(navigator.platform)
+    ? 'Microsoft YaHei'
+    : 'Noto Sans CJK SC'
 
 export const TOOLS = [
   // ================= 视频处理 =================
@@ -323,8 +333,38 @@ export const TOOLS = [
   },
 
   {
-    id: 'rotate',
+    id: 'reverse',
     group: '视频',
+    name: '视频倒放',
+    desc: '时光倒流，整段画面从尾到头播放',
+    icon: 'reverse',
+    action: '开始倒放',
+    defaults: { audio: 'reverse' },
+    fields: [
+      {
+        key: 'audio', type: 'segmented', label: '声音',
+        options: [
+          { value: 'reverse', label: '同步倒放' },
+          { value: 'mute', label: '静音' },
+        ],
+        hint: (s) => (s.audio === 'reverse' ? '声音也倒着放，效果魔性' : '只倒放画面'),
+      },
+    ],
+    output: () => ({ suffix: '_rev', ext: 'mp4' }),
+    totalUs: (item) => item.duration * 1e6,
+    validate(item) {
+      if (item.duration > 120) return '倒放要把整段视频装进内存，请先用「视频剪辑」截取到 2 分钟内'
+    },
+    buildArgs(item, s, out) {
+      const audio = s.audio === 'reverse' && item.audioCodec ? ['-af', 'areverse', '-c:a', 'aac', '-b:a', '160k'] : ['-an']
+      return ['-y', '-i', item.path, '-vf', 'reverse', ...audio, '-c:v', 'libx264', '-preset', 'medium', '-crf', '20', '-movflags', '+faststart', out]
+    },
+  },
+
+  // ================= 画面 =================
+  {
+    id: 'rotate',
+    group: '画面',
     name: '旋转翻转',
     desc: '手机拍竖了、镜像反了，一键转正',
     icon: 'rotate',
@@ -348,6 +388,212 @@ export const TOOLS = [
     buildArgs(item, s, out) {
       const vf = { cw: 'transpose=1', ccw: 'transpose=2', flip: 'transpose=1,transpose=1', hflip: 'hflip', vflip: 'vflip' }[s.op]
       return ['-y', '-i', item.path, '-vf', vf, '-c:v', 'libx264', '-preset', 'medium', '-crf', '18', ...audioArgs(item, 'mp4'), '-movflags', '+faststart', out]
+    },
+  },
+
+  {
+    id: 'crop',
+    group: '画面',
+    name: '画面裁剪',
+    desc: '按目标比例居中裁剪画面，先预览再动手',
+    icon: 'crop',
+    action: '开始裁剪',
+    defaults: { aspect: '9:16' },
+    fields: [
+      {
+        key: 'aspect', type: 'segmented', label: '目标比例',
+        options: [
+          { value: '9:16', label: '9:16 竖屏' },
+          { value: '1:1', label: '1:1 方形' },
+          { value: '4:3', label: '4:3' },
+          { value: '16:9', label: '16:9 横屏' },
+        ],
+        hint: () => '保留画面中心，裁掉两侧或上下',
+      },
+    ],
+    output: () => ({ suffix: '_crop', ext: 'mp4' }),
+    totalUs: (item) => item.duration * 1e6,
+    _dims(item, s) {
+      const [aw, ah] = s.aspect.split(':').map(Number)
+      let cw = item.width
+      let ch = Math.round((item.width * ah) / aw)
+      if (ch > item.height) {
+        ch = item.height
+        cw = Math.round((item.height * aw) / ah)
+      }
+      return [cw - (cw % 2), ch - (ch % 2)]
+    },
+    validate(item, s) {
+      const [cw, ch] = this._dims(item, s)
+      if (cw === item.width && ch === item.height) return '视频已经是该比例，无需裁剪'
+    },
+    buildArgs(item, s, out) {
+      const [cw, ch] = this._dims(item, s)
+      return ['-y', '-i', item.path, '-vf', `crop=${cw}:${ch}`, '-c:v', 'libx264', '-preset', 'medium', '-crf', '20', ...audioArgs(item, 'mp4'), '-movflags', '+faststart', out]
+    },
+    previewArgs(item, s, png) {
+      const [cw, ch] = this._dims(item, s)
+      return ['-y', '-ss', previewTs(item), '-i', item.path, '-vf', `crop=${cw}:${ch}`, '-frames:v', '1', png]
+    },
+  },
+
+  {
+    id: 'vertical',
+    group: '画面',
+    name: '横竖屏适配',
+    desc: '横屏变竖屏、竖屏变横屏，模糊背景铺满不裁内容',
+    icon: 'vertical',
+    action: '开始转换',
+    defaults: { target: '9:16', bg: 'blur' },
+    fields: [
+      {
+        key: 'target', type: 'segmented', label: '目标画幅',
+        options: [
+          { value: '9:16', label: '9:16 竖屏' },
+          { value: '1:1', label: '1:1 方形' },
+          { value: '16:9', label: '16:9 横屏' },
+        ],
+        hint: (s) => ({ '9:16': '抖音、视频号、快手', '1:1': '朋友圈、小红书', '16:9': 'B站、YouTube' }[s.target]),
+      },
+      {
+        key: 'bg', type: 'segmented', label: '背景填充',
+        options: [
+          { value: 'blur', label: '画面模糊' },
+          { value: 'black', label: '黑边' },
+        ],
+        hint: (s) => (s.bg === 'blur' ? '用放大模糊的画面本身当背景' : '经典黑边'),
+      },
+    ],
+    output: () => ({ suffix: '_fit', ext: 'mp4' }),
+    totalUs: (item) => item.duration * 1e6,
+    _dims(s) {
+      return { '9:16': [1080, 1920], '1:1': [1080, 1080], '16:9': [1920, 1080] }[s.target]
+    },
+    _filter(item, s) {
+      const [W, H] = this._dims(s)
+      if (s.bg === 'black') {
+        return `scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2`
+      }
+      return `split[a][b];[a]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},boxblur=20:5[bg];[b]scale=${W}:${H}:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2`
+    },
+    validate(item, s) {
+      const [W, H] = this._dims(s)
+      if (Math.abs(item.width / item.height - W / H) < 0.01) return '视频已经是该画幅比例'
+    },
+    buildArgs(item, s, out) {
+      return ['-y', '-i', item.path, '-vf', this._filter(item, s), '-c:v', 'libx264', '-preset', 'medium', '-crf', '20', ...audioArgs(item, 'mp4'), '-movflags', '+faststart', out]
+    },
+    previewArgs(item, s, png) {
+      return ['-y', '-ss', previewTs(item), '-i', item.path, '-vf', this._filter(item, s), '-frames:v', '1', png]
+    },
+  },
+
+  {
+    id: 'watermark',
+    group: '画面',
+    name: '加水印',
+    desc: '给视频盖上 Logo 或图片水印，位置大小透明度随调',
+    icon: 'watermark',
+    action: '开始添加',
+    defaults: { image: '', pos: 'br', wmWidth: 15, opacity: 80 },
+    fields: [
+      { key: 'image', type: 'file', label: '水印图片', pickTitle: '选择水印图片', filterName: '图片', exts: ['png', 'jpg', 'jpeg', 'webp'] },
+      {
+        key: 'pos', type: 'segmented', label: '位置',
+        options: [
+          { value: 'tl', label: '左上' },
+          { value: 'tr', label: '右上' },
+          { value: 'c', label: '中心' },
+          { value: 'bl', label: '左下' },
+          { value: 'br', label: '右下' },
+        ],
+      },
+      {
+        key: 'wmWidth', type: 'range', min: 5, max: 40,
+        label: (s) => `大小 ${s.wmWidth}%`,
+        hint: () => '相对画面宽度的占比',
+      },
+      {
+        key: 'opacity', type: 'range', min: 10, max: 100,
+        label: (s) => `不透明度 ${s.opacity}%`,
+        hint: (s) => (s.opacity <= 50 ? '半透明，不抢画面' : '清晰醒目'),
+      },
+    ],
+    output: () => ({ suffix: '_wm', ext: 'mp4' }),
+    totalUs: (item) => item.duration * 1e6,
+    validate(item, s) {
+      if (!s.image) return '请先选择水印图片'
+    },
+    async _fc(item, s) {
+      // 图片同样可能带中文名, 复制成安全路径 (滤镜之外的 -i 其实安全, 统一处理省心)
+      const w = Math.round((item.width * s.wmWidth) / 100)
+      const m = Math.max(16, Math.round(item.width * 0.02))
+      const pos = {
+        tl: `${m}:${m}`,
+        tr: `main_w-overlay_w-${m}:${m}`,
+        c: '(main_w-overlay_w)/2:(main_h-overlay_h)/2',
+        bl: `${m}:main_h-overlay_h-${m}`,
+        br: `main_w-overlay_w-${m}:main_h-overlay_h-${m}`,
+      }[s.pos]
+      return `[1]format=rgba,colorchannelmixer=aa=${s.opacity / 100},scale=${w}:-1[wm];[0:v][wm]overlay=${pos}[v]`
+    },
+    async buildArgs(item, s, out) {
+      const fc = await this._fc(item, s)
+      return [
+        '-y', '-i', item.path, '-i', s.image,
+        '-filter_complex', fc, '-map', '[v]', '-map', '0:a?',
+        '-c:v', 'libx264', '-preset', 'medium', '-crf', '20', '-c:a', 'copy',
+        '-movflags', '+faststart', out,
+      ]
+    },
+    async previewArgs(item, s, png) {
+      const fc = await this._fc(item, s)
+      return ['-y', '-ss', previewTs(item), '-i', item.path, '-i', s.image, '-filter_complex', fc, '-map', '[v]', '-frames:v', '1', png]
+    },
+  },
+
+  // ================= 字幕 =================
+  {
+    id: 'subtitle',
+    group: '字幕',
+    name: '烧录字幕',
+    desc: '把 SRT / ASS 字幕永久压进画面，任何播放器都能看',
+    icon: 'subtitle',
+    action: '开始烧录',
+    defaults: { sub: '', fontsize: 24 },
+    fields: [
+      { key: 'sub', type: 'file', label: '字幕文件', pickTitle: '选择字幕', filterName: '字幕文件', exts: ['srt', 'ass', 'ssa', 'vtt'] },
+      {
+        key: 'fontsize', type: 'segmented', label: '字号',
+        options: [
+          { value: 18, label: '小' },
+          { value: 24, label: '中' },
+          { value: 30, label: '大' },
+        ],
+        hint: (s) => (extOf(s.sub || '') === 'ass' || extOf(s.sub || '') === 'ssa' ? 'ASS 字幕自带样式，忽略此设置' : '白字黑边，底部居中'),
+      },
+    ],
+    output: () => ({ suffix: '_sub', ext: 'mp4' }),
+    totalUs: (item) => item.duration * 1e6,
+    validate(item, s) {
+      if (!s.sub) return '请先选择字幕文件'
+    },
+    async _vf(s) {
+      const ext = extOf(s.sub)
+      // 复制到安全 ASCII 路径, 绕开滤镜参数的路径转义地狱
+      const safe = await copyToTemp(s.sub, ext)
+      const p = safe.replace(/\\/g, '/').replace(/:/g, '\\:')
+      if (ext === 'ass' || ext === 'ssa') return `ass=filename=${p}`
+      return `subtitles=filename=${p}:force_style='FontName=${SUB_FONT},FontSize=${s.fontsize},Outline=1,Shadow=0'`
+    },
+    async buildArgs(item, s, out) {
+      const vf = await this._vf(s)
+      return ['-y', '-i', item.path, '-vf', vf, '-c:v', 'libx264', '-preset', 'medium', '-crf', '20', ...audioArgs(item, 'mp4'), '-movflags', '+faststart', out]
+    },
+    async previewArgs(item, s, png) {
+      const vf = await this._vf(s)
+      // 字幕依赖时间轴, 用输出侧 seek 保证预览帧对应正确的字幕条
+      return ['-y', '-i', item.path, '-vf', vf, '-ss', String(Math.min(2, item.duration / 2)), '-frames:v', '1', png]
     },
   },
 
@@ -552,7 +798,7 @@ export const TOOLS = [
   },
 ]
 
-export const TOOL_GROUPS = ['视频', '音频', '图像'].map((g) => ({
+export const TOOL_GROUPS = ['视频', '画面', '音频', '字幕', '图像'].map((g) => ({
   name: g,
   tools: TOOLS.filter((t) => t.group === g),
 }))

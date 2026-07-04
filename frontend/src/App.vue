@@ -1,9 +1,10 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
+import { convertFileSrc } from '@tauri-apps/api/core'
 import {
   checkFFmpeg, pickVideos, pickFile, probe, runFFmpeg,
-  outputPath, revealFile, removeFile, isVideo,
+  outputPath, revealFile, removeFile, tempPath, isVideo,
 } from './backend.js'
 import { TOOLS, TOOL_GROUPS } from './tools.js'
 import { ICONS } from './icons.js'
@@ -156,7 +157,7 @@ async function runOne(item) {
     } else {
       const o = t.output(item, s)
       out = await outputPath(item.path, o.suffix, o.ext)
-      steps = t.buildSteps ? t.buildSteps(item, s, out) : [t.buildArgs(item, s, out)]
+      steps = t.buildSteps ? t.buildSteps(item, s, out) : [await t.buildArgs(item, s, out)]
       totalUs = t.totalUs(item, s)
     }
 
@@ -225,6 +226,40 @@ function moveItem(item, dir) {
   if (target === undefined) return
   const cur = idxs[pos]
   ;[arr[cur], arr[target]] = [arr[target], arr[cur]]
+}
+
+// ---------- 效果预览: 按当前参数抽一帧 ----------
+const preview = reactive({ open: false, src: '', loading: false, forUid: 0 })
+let previewSeq = 0
+
+async function previewItem(item) {
+  const t = tool.value
+  const s = settings.value
+  const invalid = t.validate?.(item, s)
+  if (invalid) {
+    item.status = 'error'
+    item.message = invalid
+    return
+  }
+  preview.loading = true
+  preview.forUid = item.uid
+  try {
+    const png = await tempPath(`lightvideo-preview-${item.uid}-${++previewSeq}.png`)
+    const args = await t.previewArgs(item, s, png)
+    const { done } = await runFFmpeg(args, 0, () => {})
+    const r = await done
+    if (r.ok) {
+      preview.src = convertFileSrc(png)
+      preview.open = true
+    } else {
+      groupError.value = '预览失败：' + r.message
+    }
+  } catch (e) {
+    groupError.value = '预览失败：' + String(e)
+  } finally {
+    preview.loading = false
+    preview.forUid = 0
+  }
 }
 
 function clearFinished() {
@@ -467,6 +502,14 @@ function baseName(path) {
                 <button class="btn ghost small" title="上移" @click="moveItem(item, -1)">↑</button>
                 <button class="btn ghost small" title="下移" @click="moveItem(item, 1)">↓</button>
               </template>
+              <button
+                v-if="tool.previewArgs && item.status === 'ready'"
+                class="btn ghost small"
+                :disabled="preview.loading"
+                @click="previewItem(item)"
+              >
+                {{ preview.loading && preview.forUid === item.uid ? '生成中…' : '预览效果' }}
+              </button>
               <button v-if="['queued', 'running'].includes(item.status)" class="btn ghost small" @click="cancel(item)">取消</button>
               <button v-if="item.status === 'done'" class="btn ghost small" @click="revealFile(item.output)">显示文件</button>
               <button v-if="['error', 'cancelled'].includes(item.status) && (item.width || item.isJob)" class="btn ghost small" @click="retry(item)">重试</button>
@@ -480,6 +523,17 @@ function baseName(path) {
     <!-- 拖拽遮罩 -->
     <div v-if="dragging" class="drag-overlay">
       <div class="drag-overlay-text">松手，交给轻影</div>
+    </div>
+
+    <!-- 效果预览弹层 -->
+    <div v-if="preview.open" class="preview-mask" @click="preview.open = false">
+      <div class="preview-box" @click.stop>
+        <img :src="preview.src" alt="效果预览" />
+        <div class="preview-foot">
+          <span>按当前参数生成的单帧预览</span>
+          <button class="btn primary" @click="preview.open = false">好的</button>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -1087,5 +1141,56 @@ function baseName(path) {
   padding: 14px 34px;
   border-radius: 14px;
   box-shadow: 0 12px 40px rgba(22, 100, 255, 0.28);
+}
+
+/* 效果预览 */
+.preview-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(16, 22, 36, 0.55);
+  backdrop-filter: blur(3px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  animation: fadeIn 0.18s ease;
+}
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+}
+.preview-box {
+  background: #fff;
+  border-radius: 14px;
+  padding: 12px;
+  max-width: min(78vw, 900px);
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: 0 24px 80px rgba(10, 20, 40, 0.35);
+  animation: popIn 0.22s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+@keyframes popIn {
+  from {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+}
+.preview-box img {
+  max-width: 100%;
+  max-height: calc(86vh - 74px);
+  object-fit: contain;
+  border-radius: 8px;
+  background: var(--fill-2);
+}
+.preview-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4px 2px;
+  font-size: 12px;
+  color: var(--text-3);
 }
 </style>

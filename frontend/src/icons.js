@@ -51,6 +51,26 @@ export const ICONS = {
   targetsize: wrap(
     '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4.4"/><circle cx="12" cy="12" r="1.1" fill="currentColor" stroke="none"/>'
   ),
+  // 倒放: 双回退箭头
+  reverse: wrap(
+    '<polyline points="11.5 17 6.5 12 11.5 7"/><polyline points="18.5 17 13.5 12 18.5 7"/>'
+  ),
+  // 裁剪: 经典裁切框
+  crop: wrap(
+    '<path d="M7 3.5v11.5a2 2 0 0 0 2 2h11.5"/><path d="M17 20.5V9a2 2 0 0 0-2-2H3.5"/>'
+  ),
+  // 横竖屏: 两种画幅
+  vertical: wrap(
+    '<rect x="3.5" y="8" width="9.5" height="8.5" rx="1.6"/><rect x="15.5" y="4.5" width="5" height="15" rx="1.6"/>'
+  ),
+  // 水印: 画框角落的水滴
+  watermark: wrap(
+    '<rect x="3.5" y="3.5" width="17" height="17" rx="3"/><path d="M15.9 13.8a2.9 2.9 0 1 1-5.8 0c0-2 2.9-4.6 2.9-4.6s2.9 2.6 2.9 4.6z"/>'
+  ),
+  // 字幕: 画框内文字行
+  subtitle: wrap(
+    '<rect x="3" y="4.5" width="18" height="15" rx="3"/><line x1="6.5" y1="13.5" x2="11" y2="13.5"/><line x1="13.5" y1="13.5" x2="17.5" y2="13.5"/><line x1="6.5" y1="16.3" x2="9" y2="16.3"/><line x1="11.5" y1="16.3" x2="17.5" y2="16.3"/>'
+  ),
   // 添加
   plus: wrap('<line x1="12" y1="5.5" x2="12" y2="18.5"/><line x1="5.5" y1="12" x2="18.5" y2="12"/>'),
   // 品牌: 羽翼播放

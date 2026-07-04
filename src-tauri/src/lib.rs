@@ -49,6 +49,27 @@ fn remove_file(path: String) {
     let _ = std::fs::remove_file(&path);
 }
 
+/// 返回系统临时目录中的一个文件路径 (预览帧等临时产物)
+#[tauri::command]
+fn temp_path(name: String) -> String {
+    std::env::temp_dir().join(name).to_string_lossy().to_string()
+}
+
+/// 把素材复制到临时目录并改用安全 ASCII 文件名
+/// (ffmpeg 滤镜参数里的路径转义规则很脆, 中文/空格/冒号一律绕开)
+#[tauri::command]
+fn copy_to_temp(src: String, ext: String) -> Result<String, String> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let dest = std::env::temp_dir().join(format!(
+        "lightvideo-asset-{}-{n}.{ext}",
+        std::process::id()
+    ));
+    std::fs::copy(&src, &dest).map_err(|e| e.to_string())?;
+    Ok(dest.to_string_lossy().to_string())
+}
+
 /// 在文件管理器中显示文件
 #[tauri::command]
 fn reveal(path: String) {
@@ -80,6 +101,8 @@ pub fn run() {
             file_size,
             remove_file,
             write_concat_list,
+            temp_path,
+            copy_to_temp,
             reveal
         ])
         .setup(|app| {

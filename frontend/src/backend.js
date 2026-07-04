@@ -48,6 +48,14 @@ export function removeFile(path) {
   return invoke('remove_file', { path })
 }
 
+export function tempPath(name) {
+  return invoke('temp_path', { name })
+}
+
+export function copyToTemp(src, ext) {
+  return invoke('copy_to_temp', { src, ext })
+}
+
 // ffprobe 探测视频元信息
 export async function probe(path) {
   const name = path.split(/[/\\]/).pop()
