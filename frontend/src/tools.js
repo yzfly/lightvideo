@@ -111,7 +111,7 @@ async function ensureAsrModels(ctx, fromPct, toPct) {
       ctx.setStage('首次使用：下载语音模型（共约 230MB，支持断点续传）')
       const ok = await downloadFile(f.urls, dest, f.size, (pct) => {
         ctx.onProgress(fromPct + ((doneBytes + (f.size * pct) / 100) / totalBytes) * (toPct - fromPct))
-      }, ctx.setChild)
+      }, ctx.setChild, ctx.cancelled)
       if (ctx.cancelled()) return null
       if (!ok) throw new Error('模型下载失败，请检查网络后点击重试（已下载部分会续传）')
     }
@@ -213,7 +213,8 @@ export const TOOLS = [
     buildArgs(item, s, out) {
       const args = ['-y', '-i', item.path, '-c:v', 'libx264', '-preset', s.preset, '-crf', String(s.crf)]
       if (s.maxHeight > 0) args.push('-vf', `scale=-2:min(${s.maxHeight}\\,ih)`)
-      if (s.audioMode === 'copy') args.push('-c:a', 'copy')
+      // "原样保留"只在编码与 mp4 兼容时真 copy, 否则自动转码避免任务失败 (如 webm 的 opus 音轨)
+      if (s.audioMode === 'copy') args.push(...audioArgs(item, 'mp4'))
       else args.push('-c:a', 'aac', '-b:a', '128k')
       args.push('-movflags', '+faststart', out)
       return args
@@ -394,7 +395,8 @@ export const TOOLS = [
         hint: (s) => (s.mode === 'lossless' ? '不重编码，切点对齐到关键帧，可能偏差 1-2 秒' : '重编码，切点精确到帧，耗时较长'),
       },
     ],
-    output: () => ({ suffix: '_cut', ext: 'mp4' }),
+    // 无损模式不重编码, 沿用兼容容器; 精准模式重编码为 mp4
+    output: (item, s) => ({ suffix: '_cut', ext: s.mode === 'lossless' ? keepExt(item) : 'mp4' }),
     totalUs: (item, s) => Math.max(0, (Math.min(parseTime(s.end), item.duration) - parseTime(s.start)) * 1e6),
     validate(item, s) {
       const a = parseTime(s.start)
@@ -408,7 +410,8 @@ export const TOOLS = [
       const args = ['-y', '-ss', s.start, '-i', item.path, '-t', dur]
       if (s.mode === 'lossless') args.push('-c', 'copy', '-avoid_negative_ts', 'make_zero')
       else args.push('-c:v', 'libx264', '-preset', 'medium', '-crf', '18', '-c:a', 'aac', '-b:a', '192k')
-      args.push('-movflags', '+faststart', out)
+      if (out.endsWith('.mp4') || out.endsWith('.mov')) args.push('-movflags', '+faststart')
+      args.push(out)
       return args
     },
   },
@@ -662,7 +665,7 @@ export const TOOLS = [
       return [
         '-y', '-i', item.path, '-i', s.image,
         '-filter_complex', fc, '-map', '[v]', '-map', '0:a?',
-        '-c:v', 'libx264', '-preset', 'medium', '-crf', '20', '-c:a', 'copy',
+        '-c:v', 'libx264', '-preset', 'medium', '-crf', '20', ...audioArgs(item, 'mp4'),
         '-movflags', '+faststart', out,
       ]
     },
@@ -892,7 +895,7 @@ export const TOOLS = [
       if (s.mode === 'mix' && item.audioCodec) {
         return [
           ...base,
-          '-filter_complex', `[1:a]volume=${vol}[m];[0:a][m]amix=inputs=2:duration=first:dropout_transition=0${fade}[a]`,
+          '-filter_complex', `[1:a]volume=${vol}[m];[0:a][m]amix=inputs=2:duration=first:dropout_transition=0:normalize=0${fade}[a]`,
           '-map', '0:v', '-map', '[a]', '-c:v', 'copy', ...aenc, '-shortest', out,
         ]
       }

@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "主窗口权限: 对话框 + ffmpeg/ffprobe/sherpa-asr sidecar + curl(模型下载)",
+  "description": "主窗口权限: 对话框 + ffmpeg/ffprobe/sherpa-asr sidecar + curl(仅限模型下载: 固定参数+域名白名单)",
   "windows": ["main"],
   "permissions": [
     "core:default",
@@ -13,7 +13,22 @@
         { "name": "binaries/ffmpeg", "sidecar": true, "args": true },
         { "name": "binaries/ffprobe", "sidecar": true, "args": true },
         { "name": "binaries/sherpa-asr", "sidecar": true, "args": true },
-        { "name": "curl", "cmd": "curl", "args": true }
+        {
+          "name": "curl",
+          "cmd": "curl",
+          "args": [
+            "-fSL",
+            "--retry",
+            "2",
+            "-C",
+            "-",
+            "--connect-timeout",
+            "15",
+            "-o",
+            { "validator": ".*asr-models.*" },
+            { "validator": "^https://(github\\.com|gh-proxy\\.com|huggingface\\.co|hf-mirror\\.com|objects\\.githubusercontent\\.com|cdn-lfs[^/]*\\.huggingface\\.co)/.*" }
+          ]
+        }
       ]
     },
     {
@@ -21,8 +36,7 @@
       "allow": [
         { "name": "binaries/ffmpeg", "sidecar": true, "args": true },
         { "name": "binaries/ffprobe", "sidecar": true, "args": true },
-        { "name": "binaries/sherpa-asr", "sidecar": true, "args": true },
-        { "name": "curl", "cmd": "curl", "args": true }
+        { "name": "binaries/sherpa-asr", "sidecar": true, "args": true }
       ]
     }
   ]

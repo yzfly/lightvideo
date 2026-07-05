@@ -97,12 +97,17 @@ export async function runAsr(args, onSegment) {
 
 /**
  * 用系统 curl 下载文件, 按已落盘字节数汇报进度; 支持断点续传。
- * 依次尝试 urls, 全部失败返回 false。
+ * 依次尝试 urls, 全部失败返回 false; isCancelled 返回真时立即停止(不再换镜像)。
  */
-export async function downloadFile(urls, dest, expectedSize, onPct, setChild) {
+export async function downloadFile(urls, dest, expectedSize, onPct, setChild, isCancelled) {
   for (const url of urls) {
+    if (isCancelled?.()) return false
     const existing = await fileSize(dest)
     if (existing === expectedSize) return true
+    if (existing > expectedSize) {
+      // 残留文件比预期还大(镜像塞了错误页/上游文件变了): 续传只会永远 416, 删掉重来
+      await removeFile(dest)
+    }
     const cmd = Command.create('curl', ['-fSL', '--retry', '2', '-C', '-', '--connect-timeout', '15', '-o', dest, url])
     const done = new Promise((resolve) => {
       cmd.on('close', ({ code }) => resolve(code))
@@ -114,14 +119,16 @@ export async function downloadFile(urls, dest, expectedSize, onPct, setChild) {
       const sz = await fileSize(dest)
       onPct?.(Math.min(99, (sz / expectedSize) * 100))
     }, 800)
-    const code = await done
+    await done
     clearInterval(poll)
     setChild?.(null)
+    // 取消判定不能依赖退出码: Windows 上 kill 后 curl 退出码是 1 而不是 null
+    if (isCancelled?.()) return false
     if ((await fileSize(dest)) === expectedSize) {
       onPct?.(100)
       return true
     }
-    if (code === null) return false // 被取消
+    if ((await fileSize(dest)) > expectedSize) await removeFile(dest)
   }
   return false
 }
