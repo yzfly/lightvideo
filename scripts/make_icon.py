@@ -10,8 +10,8 @@ SS = 4    # 超采样抗锯齿
 s, m, r = S * SS, M * SS, R * SS
 
 # ---- 渐变底 (对角线性: 亮蓝 -> 深蓝, 单一色相不混紫) ----
-top = (61, 127, 255)     # #3D7FFF
-bottom = (11, 74, 204)   # #0B4ACC
+top = (107, 219, 255)    # #6BDBFF 青
+bottom = (46, 139, 255)  # #2E8BFF 亮蓝
 grad = Image.new("RGB", (s, s))
 px = grad.load()
 for y in range(s):

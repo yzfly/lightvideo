@@ -83,5 +83,5 @@ export const ICONS = {
   plus: wrap('<line x1="12" y1="5.5" x2="12" y2="18.5"/><line x1="5.5" y1="12" x2="18.5" y2="12"/>'),
   // 品牌: 羽翼播放
   brand:
-    '<svg viewBox="0 0 40 40" fill="none"><rect width="40" height="40" rx="10.5" fill="url(#lv-g)"/><path d="M15.2 12.1c0-1.24 1.36-2 2.42-1.35l11.2 6.9a1.58 1.58 0 0 1 0 2.7l-11.2 6.9c-1.06.65-2.42-.11-2.42-1.35V12.1z" fill="#fff"/><path d="M9 14.5h4.4M9 20h3.2M9 25.5h4.4" stroke="#fff" stroke-opacity=".85" stroke-width="2.2" stroke-linecap="round"/><defs><linearGradient id="lv-g" x1="4" y1="3" x2="36" y2="38" gradientUnits="userSpaceOnUse"><stop stop-color="#3D7FFF"/><stop offset="1" stop-color="#0E4FD1"/></linearGradient></defs></svg>',
+    '<svg viewBox="0 0 40 40" fill="none"><rect width="40" height="40" rx="10.5" fill="url(#lv-g)"/><path d="M15.2 12.1c0-1.24 1.36-2 2.42-1.35l11.2 6.9a1.58 1.58 0 0 1 0 2.7l-11.2 6.9c-1.06.65-2.42-.11-2.42-1.35V12.1z" fill="#fff"/><path d="M9 14.5h4.4M9 20h3.2M9 25.5h4.4" stroke="#fff" stroke-opacity=".85" stroke-width="2.2" stroke-linecap="round"/><defs><linearGradient id="lv-g" x1="4" y1="3" x2="36" y2="38" gradientUnits="userSpaceOnUse"><stop stop-color="#6BDBFF"/><stop offset="1" stop-color="#2E8BFF"/></linearGradient></defs></svg>',
 }
