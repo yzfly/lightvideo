@@ -1,6 +1,6 @@
 {
   "name": "lightvideo",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "轻影 LightVideo - FFmpeg 视频工具箱。压缩、转格式、提取音频、剪辑、转 GIF、截图。",
   "private": true,
   "scripts": {

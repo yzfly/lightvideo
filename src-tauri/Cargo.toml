@@ -1,6 +1,6 @@
 [package]
 name = "lightvideo"
-version = "1.0.0"
+version = "1.0.1"
 description = "轻影 LightVideo - FFmpeg 视频工具箱"
 authors = ["云中江树"]
 license = "MIT"
