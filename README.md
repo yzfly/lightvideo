@@ -127,6 +127,13 @@ docs/                README 素材与截图 demo 模式 (?demo=<toolId>)
 **支持 H.265 / AV1 吗？**
 当前以 H.264 为核心——兼容性最好，任何设备都能播。H.265 与硬件加速在路线图上。
 
+## 「轻」系列
+
+本地优先的轻工具家族，同样的设计语言，同样的零依赖：
+
+- 🎬 **轻影 LightVideo**（本项目）— FFmpeg 视频工具箱
+- 📄 [**轻卷 LightScroll**](https://github.com/yzfly/lightscroll) — 4MB 的 PDF 工具箱：阅读 / 防删除水印 / 加密解密 / 合并压缩
+
 ## 许可
 
 本项目采用 [MIT](LICENSE) 协议开源，随便用。
